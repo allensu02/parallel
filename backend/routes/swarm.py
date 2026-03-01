@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +17,12 @@ from backend.agent.browser_swarm import (
     get_active_agents,
     get_active_agent,
 )
+from backend.services.demo_recording import (
+    fetch_session_recording,
+    normalize_recording_to_actions,
+    actions_to_summary_text,
+)
+from backend.agent.llm import synthesize_demo_actions_to_procedure
 
 router = APIRouter()
 
@@ -53,6 +60,109 @@ async def create_swarm(body: SwarmCreate):
 async def list_swarms():
     swarms = await db.list_swarms()
     return [SwarmOut(**s) for s in swarms]
+
+
+# ---------------------------------------------------------------------------
+# Demo recording — start session, stop and synthesize to procedure
+# ---------------------------------------------------------------------------
+
+@router.post("/demo/start")
+async def demo_start():
+    """Create a Browserbase session for the user to browse; recording is captured by Browserbase."""
+    from browserbase import Browserbase
+
+    if not BROWSERBASE_API_KEY or not BROWSERBASE_PROJECT_ID:
+        raise HTTPException(status_code=400, detail="Browserbase not configured")
+
+    def _create():
+        bb = Browserbase(api_key=BROWSERBASE_API_KEY)
+        context = bb.contexts.create(project_id=BROWSERBASE_PROJECT_ID)
+        session = bb.sessions.create(
+            project_id=BROWSERBASE_PROJECT_ID,
+            browser_settings={
+                "context": {"id": context.id, "persist": True},
+                "solveCaptchas": True,
+                "fingerprint": {
+                    "browsers": ["chrome"],
+                    "devices": ["desktop"],
+                    "operatingSystems": ["macos"],
+                },
+            },
+            proxies=[{"type": "browserbase", "geolocation": {"country": "US"}}],
+        )
+        debug_info = bb.sessions.debug(session.id)
+        return {
+            "session_id": session.id,
+            "live_view_url": debug_info.debugger_fullscreen_url,
+        }
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _create)
+    return result
+
+
+@router.post("/demo/stop")
+async def demo_stop(body: dict):
+    """Stop demo: fetch recording, normalize, synthesize to procedure, store demo."""
+    session_id = (body.get("session_id") or "").strip()
+    name = (body.get("name") or "").strip()
+
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+
+    if not BROWSERBASE_API_KEY:
+        raise HTTPException(status_code=400, detail="Browserbase not configured")
+
+    try:
+        events = await fetch_session_recording(session_id, BROWSERBASE_API_KEY)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch session recording. It may not be ready yet; try again in a few seconds. {e!s}",
+        )
+    actions = normalize_recording_to_actions(events)
+    actions_text = actions_to_summary_text(actions)
+    instruction_summary = await synthesize_demo_actions_to_procedure(actions_text)
+
+    raw_events_json = json.dumps(events[:500]) if events else "[]"
+    demo = await db.create_task_demo(
+        name=name or f"Demo {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
+        instruction_summary=instruction_summary,
+        session_id=session_id,
+        raw_events=raw_events_json,
+    )
+    return {
+        "id": demo["id"],
+        "name": demo["name"],
+        "instruction_summary": demo["instruction_summary"],
+        "created_at": demo["created_at"],
+    }
+
+
+@router.get("/demos")
+async def list_demos():
+    """List all saved task demos."""
+    demos = await db.list_task_demos()
+    return [
+        {"id": d["id"], "name": d["name"], "instruction_summary": d["instruction_summary"], "created_at": d["created_at"]}
+        for d in demos
+    ]
+
+
+@router.get("/demos/prompt-template")
+async def get_demo_prompt_template():
+    """Return the prompt template used to synthesize recordings into instructions (for display in UI)."""
+    from backend.agent.llm import get_demo_synthesis_prompt_template
+    return {"prompt_template": get_demo_synthesis_prompt_template()}
+
+
+@router.get("/demos/{demo_id}")
+async def get_demo(demo_id: str):
+    """Get a single task demo by id."""
+    demo = await db.get_task_demo(demo_id)
+    if not demo:
+        raise HTTPException(status_code=404, detail="Demo not found")
+    return {"id": demo["id"], "name": demo["name"], "instruction_summary": demo["instruction_summary"], "created_at": demo["created_at"]}
 
 
 # ---------------------------------------------------------------------------

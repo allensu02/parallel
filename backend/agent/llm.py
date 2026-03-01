@@ -371,3 +371,101 @@ async def check_needs_info(
                 question = ""
 
     return needs_info, question
+
+
+# ---------------------------------------------------------------------------
+# Demo recording synthesis (browser actions → natural-language procedure)
+# ---------------------------------------------------------------------------
+
+# Exposed so the UI can show "what prompt we use" (e.g. GET /api/swarm/demos/prompt-template).
+DEMO_SYNTHESIS_PROMPT_TEMPLATE = """\
+The user performed the following recorded actions in a browser. Turn this into a clear procedure that another agent could follow to do the same thing.
+
+Rules:
+- Describe steps in terms of intent and what the user did (e.g. "Go to the Stanford login page", "Enter credentials and click Sign in", "Complete Duo two-factor authentication"), don't use raw coordinates but you may use general location in the page.
+- Use the URLs to name the pages (e.g. "Stanford login", "Duo Security 2FA page"). Use any typed text to infer what was entered (e.g. "entered username", "submitted the form").
+- Write as continuous instructions an agent could follow. No bullet numbers, no preamble. Output only the procedure text."""
+
+_ACTIONS_BLOCK = """\
+Recorded actions:
+{actions_text}
+"""
+
+
+def get_demo_synthesis_prompt_template() -> str:
+    """Return the full prompt template with placeholder, for display in UI."""
+    return DEMO_SYNTHESIS_PROMPT_TEMPLATE + "\n\n" + _ACTIONS_BLOCK.format(actions_text="<recorded actions go here>")
+
+
+async def synthesize_demo_actions_to_procedure(actions_text: str) -> str:
+    """Turn a text summary of recorded browser actions into natural-language procedure for agents.
+    actions_text: output of demo_recording.actions_to_summary_text(normalized_actions).
+    Returns the instruction_summary string to store and prepend to future tasks.
+    """
+    if not actions_text or actions_text.strip() == "No recorded actions.":
+        return "The user opened a browser but no meaningful actions were recorded."
+    client = _get_async_client()
+    prompt = DEMO_SYNTHESIS_PROMPT_TEMPLATE + "\n\n" + _ACTIONS_BLOCK.format(
+        actions_text=actions_text
+    )
+    resp = await _retry_on_rate_limit(
+        client.messages.create,
+        model="claude-sonnet-4-20250514",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Pick best demo for a task (for demo_mode="auto")
+# ---------------------------------------------------------------------------
+
+_PICK_DEMO_PROMPT = """\
+Given this task and the following saved demos (recorded procedures), pick the one demo that best matches the task. If none are relevant, respond with exactly: none
+
+Task: {instruction}
+
+Demos (id, name, summary):
+{demos_list}
+
+Respond with only the demo id (e.g. abc123def) or the word none."""
+
+
+async def pick_best_demo_for_task(instruction: str, demos: list[dict]) -> str | None:
+    """Return the id of the demo that best matches the task, or None if none match.
+    demos: list of dicts with keys id, name, instruction_summary.
+    """
+    if not instruction.strip() or not demos:
+        return None
+    lines = []
+    for d in demos:
+        did = d.get("id") or ""
+        name = d.get("name") or "Untitled"
+        summary = (d.get("instruction_summary") or "")[:500]
+        lines.append(f"- id: {did} | name: {name} | summary: {summary}")
+    demos_list = "\n".join(lines)
+    prompt = _PICK_DEMO_PROMPT.format(instruction=instruction.strip()[:1000], demos_list=demos_list)
+    client = _get_async_client()
+    resp = await _retry_on_rate_limit(
+        client.messages.create,
+        model="claude-sonnet-4-20250514",
+        max_tokens=50,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = resp.content[0].text.strip().lower()
+    if not text or text == "none":
+        return None
+    # Find which demo id appears in the response (ids are alphanumeric)
+    for d in demos:
+        did = d.get("id")
+        if not did:
+            continue
+        if did.lower() in text or text.startswith(did.lower()):
+            return d["id"]
+    # Fallback: first token might be the id
+    first = text.split()[0].strip(".,;") if text.split() else ""
+    for d in demos:
+        if d.get("id") and (d["id"].lower() == first or first in d["id"].lower()):
+            return d["id"]
+    return None

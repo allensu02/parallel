@@ -163,6 +163,8 @@ class SwarmTaskIn(BaseModel):
     max_steps: int = 50
     timeout: float = 300
     extract_schema: dict[str, Any] | None = None
+    demo_id: str | None = None  # optional — explicit demo to use (overrides demo_mode)
+    demo_mode: str | None = "auto"  # "auto" = pick best-matching demo for this task; "none" = no demo context
 
 
 class SwarmCreate(BaseModel):

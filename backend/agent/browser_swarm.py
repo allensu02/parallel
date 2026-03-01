@@ -226,9 +226,29 @@ async def start_swarm(swarm_id: str, tasks: list[dict]) -> None:
 
         # Create agents and DB records
         agents: list = []
+        from backend.agent.llm import pick_best_demo_for_task
+
         for task_dict in effective_tasks:
+            instruction = task_dict["instruction"]
+            demo_id = task_dict.get("demo_id")
+            demo_mode = (task_dict.get("demo_mode") or "auto").lower()
+
+            if demo_id:
+                demo = await db.get_task_demo(demo_id)
+                if demo and demo.get("instruction_summary"):
+                    instruction = f"Follow this procedure: {demo['instruction_summary']}\n\nTask: {instruction}"
+            elif demo_mode == "auto":
+                demos = await db.list_task_demos()
+                if demos:
+                    picked_id = await pick_best_demo_for_task(instruction, demos)
+                    if picked_id:
+                        demo = await db.get_task_demo(picked_id)
+                        if demo and demo.get("instruction_summary"):
+                            instruction = f"Follow this procedure: {demo['instruction_summary']}\n\nTask: {instruction}"
+                            print(f"[Swarm] Task matched demo: {demo.get('name', picked_id)}")
+
             task = AgentTask(
-                instruction=task_dict["instruction"],
+                instruction=instruction,
                 url=task_dict.get("url", ""),
                 max_steps=task_dict.get("max_steps", SWARM_MAX_STEPS),
                 timeout=task_dict.get("timeout", 300),
