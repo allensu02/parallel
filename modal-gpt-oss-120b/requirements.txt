@@ -1,0 +1,3 @@
+# For local entrypoint (modal run) and Modal CLI
+modal>=0.64.0
+aiohttp>=3.9.0
