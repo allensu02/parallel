@@ -104,8 +104,10 @@ async def demo_stop(body: dict):
             detail=f"Failed to fetch session recording. It may not be ready yet; try again in a few seconds. {e!s}",
         )
 
+    print(f"[Demo] Fetched {len(events)} rrweb events from session {session_id}")
     actions = normalize_recording_to_actions(events)
     actions_text = actions_to_summary_text(actions)
+    print(f"[Demo] Normalized to {len(actions)} actions. Summary:\n{actions_text[:1000]}")
     instruction_summary = await synthesize_demo_actions_to_procedure(actions_text)
 
     raw_events_json = json.dumps(events[:500]) if events else "[]"

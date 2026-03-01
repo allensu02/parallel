@@ -461,12 +461,29 @@ async def check_needs_info(
 # ---------------------------------------------------------------------------
 
 DEMO_SYNTHESIS_PROMPT_TEMPLATE = """\
-The user performed the following recorded actions in a browser. Turn this into a clear procedure that another agent could follow to do the same thing.
+The user performed the following recorded actions in a browser. Turn this into a clear, \
+specific procedure that another browser agent could follow to replicate the same workflow.
+
+Each click action may include:
+- The element text (what was directly clicked)
+- A [surrounding text: ...] block showing the full text of the containing card/item/section
+
+Use the [surrounding text] to understand WHAT the user actually selected. For example:
+- If the element says "4.2 • 1.2 mi" but the surrounding text says "Taco Bell 4.2 • 1.2 mi \
+$ Fast Food 20-35 min", the user selected the TACO BELL restaurant.
+- If the element says "Add to cart" but the surrounding text mentions "Crunchwrap Supreme $7.99", \
+the user added a CRUNCHWRAP SUPREME to their cart.
+- "Select option" actions represent radio button / checkbox selections. The element text IS the \
+option the user chose. If there's an [option group context], it shows ALL options in the group. \
+Example: "Select option 'Large — +$2.00'" means the user chose the Large size at +$2.00.
 
 Rules:
-- Describe steps in terms of intent and what the user did (e.g. "Go to the Stanford login page", "Enter credentials and click Sign in", "Complete Duo two-factor authentication"), don't use raw coordinates but you may use general location in the page.
-- Use the URLs to name the pages (e.g. "Stanford login", "Duo Security 2FA page"). Use any typed text to infer what was entered (e.g. "entered username", "submitted the form").
-- Write as continuous instructions an agent could follow. No bullet numbers, no preamble. Output only the procedure text."""
+- Be MAXIMALLY SPECIFIC: always include the exact restaurant name, item name, option name, etc. \
+These details are the entire point of the procedure — without them it's useless.
+- Use the URLs to name pages (e.g. "Go to DoorDash at www.doordash.com").
+- Group related actions into logical steps when appropriate.
+- Write as continuous numbered instructions. Output only the procedure text, no preamble.
+- If a click's purpose is unclear even from context, describe it by its position and page."""
 
 _ACTIONS_BLOCK = """\
 Recorded actions:
@@ -496,7 +513,7 @@ async def synthesize_demo_actions_to_procedure(actions_text: str) -> str:
     resp = await _retry_on_rate_limit(
         client.messages.create,
         model="claude-sonnet-4-20250514",
-        max_tokens=400,
+        max_tokens=800,
         messages=[{"role": "user", "content": prompt}],
     )
     return resp.content[0].text.strip()
