@@ -262,6 +262,114 @@ export async function getCalendarAvailability(
 }
 
 // ---------------------------------------------------------------------------
+// Browser Swarm
+// ---------------------------------------------------------------------------
+
+export interface SwarmTask {
+  instruction: string;
+  url?: string;
+  max_steps?: number;
+  timeout?: number;
+  extract_schema?: Record<string, unknown>;
+}
+
+export interface Swarm {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  created_at: string;
+  finished_at: string | null;
+  total_agents: number;
+  completed_agents: number;
+  failed_agents: number;
+}
+
+export interface SwarmAgent {
+  id: string;
+  swarm_id: string;
+  task_url: string;
+  task_instruction: string;
+  status: string;
+  current_action: string;
+  session_id: string;
+  live_view_url: string;
+  result: string | null;
+  error_msg: string | null;
+  actions_taken: number;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export async function createSwarm(tasks: SwarmTask[]): Promise<Swarm> {
+  return fetchAPI<Swarm>("/api/swarm", {
+    method: "POST",
+    body: JSON.stringify({ tasks }),
+  });
+}
+
+export async function listSwarms(): Promise<Swarm[]> {
+  return fetchAPI<Swarm[]>("/api/swarm");
+}
+
+export async function getSwarm(swarmId: string): Promise<Swarm> {
+  return fetchAPI<Swarm>(`/api/swarm/${swarmId}`);
+}
+
+export async function listSwarmAgents(swarmId: string): Promise<SwarmAgent[]> {
+  return fetchAPI<SwarmAgent[]>(`/api/swarm/${swarmId}/agents`);
+}
+
+export async function getSwarmAgentLive(swarmId: string, agentId: string): Promise<SwarmAgent> {
+  return fetchAPI<SwarmAgent>(`/api/swarm/${swarmId}/agents/${agentId}/live`);
+}
+
+export async function cancelSwarm(swarmId: string): Promise<{ status: string; cancelled_agents: number }> {
+  return fetchAPI<{ status: string; cancelled_agents: number }>(`/api/swarm/${swarmId}/cancel`, {
+    method: "POST",
+  });
+}
+
+// Browser Auth (Browserbase Context persistence)
+export interface SwarmAuthStatus {
+  authenticated: boolean;
+  context_id: string | null;
+  setup_in_progress: boolean;
+}
+
+export interface SwarmAuthSetup {
+  live_view_url: string;
+  session_id: string;
+  context_id: string;
+  message: string;
+}
+
+export async function getSwarmAuthStatus(): Promise<SwarmAuthStatus> {
+  return fetchAPI<SwarmAuthStatus>("/api/swarm/auth/status");
+}
+
+export async function setupSwarmAuth(): Promise<SwarmAuthSetup> {
+  return fetchAPI<SwarmAuthSetup>("/api/swarm/auth/setup", { method: "POST" });
+}
+
+export async function saveSwarmAuth(): Promise<{ status: string; context_id: string }> {
+  return fetchAPI<{ status: string; context_id: string }>("/api/swarm/auth/save", { method: "POST" });
+}
+
+export async function cancelSwarmAuth(): Promise<{ status: string }> {
+  return fetchAPI<{ status: string }>("/api/swarm/auth/cancel", { method: "POST" });
+}
+
+export async function loginSwarmAuth(email: string, password: string): Promise<{ status: string; message: string; error?: string }> {
+  return fetchAPI<{ status: string; message: string; error?: string }>("/api/swarm/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function getSwarmSSEUrl(swarmId: string): string {
+  return `${API_BASE}/api/events/${swarmId}`;
+}
+
+// ---------------------------------------------------------------------------
 // Screenshots
 // ---------------------------------------------------------------------------
 

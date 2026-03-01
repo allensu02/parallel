@@ -17,6 +17,7 @@ from backend.routes.runs import router as runs_router
 from backend.routes.events import router as events_router
 from backend.routes.inbox import router as inbox_router
 from backend.routes.profile import router as profile_router
+from backend.routes.swarm import router as swarm_router
 
 
 async def _recover_stale_runs():
@@ -39,8 +40,18 @@ async def _recover_stale_runs():
         "WHERE status IN ('running', 'queued', 'pending_approval')",
         (now,),
     )
+    # Mark stale swarms
+    await db.execute(
+        "UPDATE swarms SET status = 'failed', finished_at = ? WHERE status IN ('running', 'queued')",
+        (now,),
+    )
+    await db.execute(
+        "UPDATE swarm_agents SET status = 'skipped', finished_at = ? "
+        "WHERE status IN ('running', 'queued')",
+        (now,),
+    )
     await db.commit()
-    print("[Startup] Recovered any stale runs/jobs from previous session.")
+    print("[Startup] Recovered any stale runs/jobs/swarms from previous session.")
 
 
 @asynccontextmanager
@@ -85,6 +96,7 @@ app.include_router(inbox_router, prefix="/api/inbox", tags=["inbox"])
 app.include_router(runs_router, prefix="/api/runs", tags=["runs"])
 app.include_router(events_router, prefix="/api/events", tags=["events"])
 app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
+app.include_router(swarm_router, prefix="/api/swarm", tags=["swarm"])
 
 
 @app.get("/api/health")

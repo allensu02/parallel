@@ -50,6 +50,9 @@ export function useSSE(url: string | null, onMessage: SSEHandler) {
         "job.draft_token", "job.draft_complete", "job.pending_approval",
         "job.question", "job.screenshot",
         "step.started", "step.completed", "step.failed",
+        // Browser swarm events
+        "swarm.started", "swarm.agents_created", "swarm.completed", "swarm.failed",
+        "agent.started", "agent.action", "agent.completed", "agent.failed",
         "keepalive",
       ];
       for (const evType of eventTypes) {

@@ -56,6 +56,17 @@ BACKEND_PORT: int = int(os.getenv("BACKEND_PORT", "8000"))
 BROWSER_POOL_SIZE: int = int(os.getenv("BROWSER_POOL_SIZE", "8"))
 
 # ---------------------------------------------------------------------------
+# Browserbase + Stagehand (browser swarm)
+# ---------------------------------------------------------------------------
+BROWSERBASE_API_KEY: str = os.getenv("BROWSERBASE_API_KEY", "")
+BROWSERBASE_PROJECT_ID: str = os.getenv("BROWSERBASE_PROJECT_ID", "")
+STAGEHAND_MODEL: str = os.getenv("STAGEHAND_MODEL", "anthropic/claude-sonnet-4-5")
+STAGEHAND_API_URL: str = os.getenv("STAGEHAND_API_URL", "https://api.stagehand.browserbase.com")
+SWARM_MAX_AGENTS: int = int(os.getenv("SWARM_MAX_AGENTS", "20"))
+SWARM_AGENT_TIMEOUT: int = int(os.getenv("SWARM_AGENT_TIMEOUT", "300"))
+SWARM_MAX_STEPS: int = int(os.getenv("SWARM_MAX_STEPS", "30"))
+
+# ---------------------------------------------------------------------------
 # Concurrency limits
 # ---------------------------------------------------------------------------
 MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "200"))
