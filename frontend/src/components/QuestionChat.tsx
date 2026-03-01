@@ -172,7 +172,8 @@ function QuestionCard({
         </div>
       </div>
 
-      {/* Email context dropdown */}
+      {/* Email context dropdown — only show for Gmail jobs */}
+      {job && (job.pipeline_type || "gmail") === "gmail" && (
       <div className="border-t border-border/30">
         <button
           onClick={handleToggleContext}
@@ -229,6 +230,7 @@ function QuestionCard({
           )}
         </AnimatePresence>
       </div>
+      )}
 
       {/* Answer or input */}
       {isAnswered ? (

@@ -380,9 +380,13 @@ class SheetsPipeline(Pipeline):
     uses_local_browser = False
 
     def can_handle(self, task_description: str) -> bool:
-        keywords = ["sheets", "spreadsheet", "google sheets", "excel", "cells", "formula"]
+        import re
+        keywords = [
+            r"\bgoogle sheets?\b", r"\bspreadsheet\b", r"\bexcel\b",
+            r"\bcreate a sheet\b", r"\bedit.{0,10}sheet\b",
+        ]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

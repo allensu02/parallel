@@ -383,12 +383,14 @@ class CalendarPipeline(Pipeline):
     uses_local_browser = False
 
     def can_handle(self, task_description: str) -> bool:
+        import re
         keywords = [
-            "calendar", "google calendar", "schedule", "meeting",
-            "event", "appointment", "free time", "availability",
+            r"\bgoogle calendar\b", r"\bschedule a\b", r"\bcreate.{0,10}meeting\b",
+            r"\bcheck.{0,10}calendar\b", r"\bfree time\b", r"\bavailability\b",
+            r"\bcreate.{0,10}event\b", r"\bappointment\b",
         ]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

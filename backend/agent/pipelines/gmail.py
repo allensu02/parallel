@@ -21,9 +21,13 @@ class GmailPipeline(Pipeline):
     uses_local_browser = True
 
     def can_handle(self, task_description: str) -> bool:
-        keywords = ["gmail", "email", "reply", "inbox", "mail", "draft", "send email"]
+        import re
+        keywords = [
+            r"\bgmail\b", r"\bemail\b", r"\binbox\b", r"\bsend.{0,10}mail\b",
+            r"\breply to\b", r"\bdraft.{0,10}(email|mail)\b",
+        ]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

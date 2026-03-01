@@ -507,14 +507,25 @@ async def synthesize_demo_actions_to_procedure(actions_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _PICK_DEMO_PROMPT = """\
-Given this task and the following saved demos (recorded procedures), pick the one demo that best matches the task. If none are relevant, respond with exactly: none
+You are matching a new task to previously-recorded demo procedures.
+Pick the one demo whose recorded steps would be DIRECTLY useful for completing this task.
+
+A demo is a good match when:
+- It targets the same application or service the task mentions
+- Its recorded steps cover the same type of operation (e.g., creating vs editing vs deleting)
+- Following the demo's procedure would meaningfully help accomplish the task
+
+A demo is NOT a match when:
+- It's for a different service or application
+- The operations are fundamentally different (e.g., demo creates a doc, task edits a sheet)
+- The similarity is only superficial (e.g., both mention "Google" but different products)
 
 Task: {instruction}
 
 Demos (id, name, summary):
 {demos_list}
 
-Respond with only the demo id (e.g. abc123def) or the word none."""
+Respond with ONLY the demo id (e.g. abc123def) or the word "none" if no demo is relevant."""
 
 
 async def pick_best_demo_for_task(instruction: str, demos: list[dict]) -> str | None:

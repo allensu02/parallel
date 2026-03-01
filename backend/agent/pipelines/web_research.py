@@ -50,19 +50,20 @@ class WebResearchPipeline(Pipeline):
     uses_local_browser = False
 
     def can_handle(self, task_description: str) -> bool:
+        import re
         desc_lower = task_description.lower()
         # Exclude if it mentions a specific GSuite product
-        gsuite_terms = ["google docs", "google sheets", "google slides",
-                        "google forms", "google drive", "google calendar",
-                        "gmail", "gdoc", "spreadsheet", "presentation"]
-        if any(g in desc_lower for g in gsuite_terms):
+        gsuite_terms = [r"\bgoogle docs?\b", r"\bgoogle sheets?\b", r"\bgoogle slides?\b",
+                        r"\bgoogle forms?\b", r"\bgoogle drive\b", r"\bgoogle calendar\b",
+                        r"\bgmail\b", r"\bgdocs?\b", r"\bspreadsheet\b", r"\bpresentation\b"]
+        if any(re.search(g, desc_lower) for g in gsuite_terms):
             return False
         keywords = [
-            "search for", "search the web", "search online",
-            "look up", "find out about", "research",
-            "google it", "who is", "what is", "tell me about",
+            r"\bsearch (for|the web|online)\b", r"\blook up\b",
+            r"\bfind out about\b", r"\bresearch\b",
+            r"\bwho is\b", r"\bwhat is\b", r"\btell me about\b",
         ]
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

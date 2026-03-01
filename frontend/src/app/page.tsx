@@ -30,6 +30,57 @@ import {
   deleteDemo,
 } from "@/lib/api";
 
+/* ─── Expandable demo card ─── */
+
+function DemoCard({ demo, onDelete }: { demo: TaskDemo; onDelete: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="group">
+      <div
+        className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-honey/5 transition-colors"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <div className="w-5 h-5 rounded-full bg-honey-glow flex items-center justify-center shrink-0 mt-0.5">
+          <Video className="w-2.5 h-2.5 text-honey" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-foreground truncate">{demo.name}</p>
+          {!expanded && (
+            <p className="text-[10px] text-muted mt-0.5 line-clamp-1">{demo.instruction_summary}</p>
+          )}
+        </div>
+        <ChevronDown
+          className={`w-3 h-3 text-muted/50 shrink-0 mt-1 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+        />
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(demo.id); }}
+          className="p-1 rounded-md text-muted/40 hover:text-error hover:bg-error/10 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+          title="Delete demo"
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
+      </div>
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <div className="px-3 pb-2.5 pl-10">
+              <p className="text-[10px] leading-relaxed text-muted whitespace-pre-wrap">
+                {demo.instruction_summary || "No description."}
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 /* ─── Main dashboard ─── */
 
 export default function Dashboard() {
@@ -374,7 +425,18 @@ function DashboardInner() {
     return c;
   }, [jobs]);
 
-  // Advanced filtered + sorted jobs
+  // Jobs for the hex swarm — applies pipeline filter but NOT status filter.
+  // The LiveDraftPanel handles fly-away animations internally; removing completed
+  // jobs from the list instantly would bypass the fly-out animation.
+  const swarmJobs = useMemo(() => {
+    let result = [...jobs];
+    if (pipelineFilter !== "all") {
+      result = result.filter(j => (j.pipeline_type || "gmail") === pipelineFilter);
+    }
+    return result;
+  }, [jobs, pipelineFilter]);
+
+  // Advanced filtered + sorted jobs (for stats, sidebar list, etc.)
   const filteredJobs = useMemo(() => {
     let result = [...jobs];
 
@@ -438,7 +500,7 @@ function DashboardInner() {
 
       {/* ═══ LAYER 0: Full-screen hex hive background ═══ */}
       <LiveDraftPanel
-        jobs={filteredJobs}
+        jobs={swarmJobs}
         draftTokens={draftTokens}
         frameData={frameData}
         contentCache={contentCacheRef.current}
@@ -511,8 +573,8 @@ function DashboardInner() {
                 }
               }}
               placeholder={`Reply to my unread emails\nCreate a Slides deck about Q4\nFill out forms.google.com/...`}
-              rows={3}
-              className="w-full bg-surface-2/50 border border-honey/12 rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-foreground/25 focus:outline-none focus:border-honey/40 focus:ring-1 focus:ring-honey/20 resize-none transition-all relative z-10"
+              rows={12}
+              className="w-full bg-surface-2/50 border border-honey/12 rounded-lg px-3 py-2.5 text-xs leading-relaxed text-foreground placeholder:text-foreground/25 focus:outline-none focus:border-honey/40 focus:ring-1 focus:ring-honey/20 resize-none transition-all relative z-10"
             />
             <div className="flex items-center justify-between relative z-10">
               <span className="text-[9px] text-honey/40 font-semibold">
@@ -586,22 +648,7 @@ function DashboardInner() {
                 >
                   <div className="glass-panel divide-y divide-honey/8 overflow-hidden">
                     {demos.map((demo) => (
-                      <div key={demo.id} className="flex items-start gap-2 px-3 py-2 group">
-                        <div className="w-5 h-5 rounded-full bg-honey-glow flex items-center justify-center shrink-0 mt-0.5">
-                          <Video className="w-2.5 h-2.5 text-honey" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-foreground truncate">{demo.name}</p>
-                          <p className="text-[10px] text-muted mt-0.5 line-clamp-1">{demo.instruction_summary}</p>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteDemo(demo.id)}
-                          className="p-1 rounded-md text-muted/40 hover:text-error hover:bg-error/10 transition-colors opacity-0 group-hover:opacity-100"
-                          title="Delete demo"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
+                      <DemoCard key={demo.id} demo={demo} onDelete={handleDeleteDemo} />
                     ))}
                   </div>
                 </motion.div>

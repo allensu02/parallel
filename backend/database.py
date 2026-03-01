@@ -230,7 +230,9 @@ async def increment_run_counter(run_id: str, column: str, amount: int = 1) -> No
 async def create_job(run_id: str, thread_id: str, subject: str = "") -> dict:
     db = await get_db()
     job_id = _uuid()
-    idemp = f"{run_id}:{thread_id}"
+    # For Gmail jobs, idempotency is per run+thread (one job per email thread).
+    # For non-Gmail jobs (thread_id is empty), each call creates a unique job.
+    idemp = f"{run_id}:{thread_id}" if thread_id else f"{run_id}:{job_id}"
     try:
         await db.execute(
             """INSERT INTO jobs (id, run_id, thread_id, subject, idempotency_key)

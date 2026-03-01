@@ -338,9 +338,14 @@ class FormsPipeline(Pipeline):
     uses_local_browser = False
 
     def can_handle(self, task_description: str) -> bool:
-        keywords = ["forms", "google forms", "survey", "questionnaire", "form"]
+        import re
+        # Use word-boundary matching to avoid false positives like
+        # "information" matching "form" or "platform" matching "form"
+        keywords = [r"\bgoogle forms?\b", r"\bsurvey\b", r"\bquestionnaire\b",
+                    r"\bcreate a form\b", r"\bmake a form\b", r"\bbuild a form\b",
+                    r"\bedit the form\b", r"\bfill out.{0,10}form\b"]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

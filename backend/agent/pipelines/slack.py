@@ -23,9 +23,12 @@ class SlackPipeline(Pipeline):
     uses_local_browser = True
 
     def can_handle(self, task_description: str) -> bool:
-        keywords = ["slack", "slack message", "channel", "dm", "direct message"]
+        import re
+        keywords = [
+            r"\bslack\b", r"\bslack message\b", r"\bdirect message\b",
+        ]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

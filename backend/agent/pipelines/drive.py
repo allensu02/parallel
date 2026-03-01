@@ -320,9 +320,13 @@ class DrivePipeline(Pipeline):
     uses_local_browser = False
 
     def can_handle(self, task_description: str) -> bool:
-        keywords = ["drive", "google drive", "files", "folders", "file management", "share file"]
+        import re
+        keywords = [
+            r"\bgoogle drive\b", r"\bfile management\b", r"\bshare.{0,10}file\b",
+            r"\bupload.{0,10}(file|folder)\b",
+        ]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

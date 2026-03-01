@@ -429,44 +429,91 @@ function ExpandedBrowserView({
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   HexSlot — positions a hex cell in the grid.
+   Snaps instantly on mount / hexSize changes.
+   Animates smoothly (2.5s) only for gap-fill repositioning.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function HexSlot({ targetX, targetY, children }: {
+  targetX: number; targetY: number; children: React.ReactNode;
+}) {
+  // Track the previous target to distinguish gap-fills from resize/mount
+  const prevTarget = useRef<{ x: number; y: number } | null>(null);
+  const [isGapFill, setIsGapFill] = useState(false);
+
+  useEffect(() => {
+    const prev = prevTarget.current;
+    if (prev !== null) {
+      // Position changed AFTER initial placement — this is a gap-fill
+      const dx = Math.abs(prev.x - targetX);
+      const dy = Math.abs(prev.y - targetY);
+      // Only treat as gap-fill if the hex grid position actually changed
+      // (not just a hexSize/resize recalculation — those change ALL positions)
+      if (dx > 5 || dy > 5) {
+        setIsGapFill(true);
+        const timer = setTimeout(() => setIsGapFill(false), 2600);
+        return () => clearTimeout(timer);
+      }
+    }
+    prevTarget.current = { x: targetX, y: targetY };
+  }, [targetX, targetY]);
+
+  // Update ref without triggering gap-fill on first render
+  if (prevTarget.current === null) {
+    prevTarget.current = { x: targetX, y: targetY };
+  }
+
+  return (
+    <div
+      className="absolute"
+      style={{
+        left: '50%',
+        top: '50%',
+        transform: `translate(${targetX}px, ${targetY}px)`,
+        transition: isGapFill ? 'transform 2.5s cubic-bezier(0.25, 0.1, 0.25, 1.0)' : 'none',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Individual hex cell — with sinusoidal bee-like flight paths
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Track previous status to detect completion transitions */
-function usePrevious<T>(value: T): T | undefined {
-  const ref = useRef<T | undefined>(undefined);
-  useEffect(() => { ref.current = value; });
-  return ref.current;
-}
-
 const DONE_STATUSES = ["completed", "skipped", "failed"];
 
-/** Generate sinusoidal waypoints for bee-like flight — smooth, round curves */
-function generateSineWaypoints(
+/**
+ * Generate a smooth arcing flight path between two points.
+ * Uses a single sine arc (not multiple oscillations) to create a
+ * gentle, rounded curve — like a real bee lazily flying from A to B.
+ */
+function generateArcPath(
   startX: number, startY: number,
   endX: number, endY: number,
   steps: number,
-  wobbleAmplitude: number
+  arcHeight: number
 ): { x: number[]; y: number[] } {
   const xKeys: number[] = [startX];
   const yKeys: number[] = [startY];
   const dx = endX - startX;
   const dy = endY - startY;
   const angle = Math.atan2(dy, dx);
+  // Perpendicular direction for the arc bulge
   const perpX = -Math.sin(angle);
   const perpY = Math.cos(angle);
 
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    // Ease the progress so movement starts slow, peaks in middle, slows at end
+    // Smooth ease-in-out progress along the line
     const easedT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-    const linearX = startX + dx * easedT;
-    const linearY = startY + dy * easedT;
-    // Smooth sine wobble — 2.5 full waves, strongest in the middle of the path
-    const wobbleEnvelope = Math.sin(t * Math.PI); // peaks at t=0.5
-    const wobble = Math.sin(t * Math.PI * 2.5) * wobbleAmplitude * wobbleEnvelope;
-    xKeys.push(linearX + wobble * perpX);
-    yKeys.push(linearY + wobble * perpY);
+    const baseX = startX + dx * easedT;
+    const baseY = startY + dy * easedT;
+    // Single smooth arc: bulge peaks at the midpoint, zero at start and end
+    const arc = Math.sin(t * Math.PI) * arcHeight;
+    xKeys.push(baseX + arc * perpX);
+    yKeys.push(baseY + arc * perpY);
   }
   return { x: xKeys, y: yKeys };
 }
@@ -478,25 +525,29 @@ function HexCell({
   streamText: string; frame: string | null;
   onFlyAway?: (jobId: string) => void;
 }) {
-  const prevStatus = usePrevious(job.status);
   const [flyingAway, setFlyingAway] = useState(false);
   const [hasArrived, setHasArrived] = useState(false);
+  // Once departure is committed, it NEVER reverses — prevents ghost re-entries
+  const departedRef = useRef(false);
 
-  // Detect transition TO a done status — trigger fly-away
+  // Trigger fly-away when job reaches a done status.
+  // Uses a 2s debounce: the done status must persist for 2s before we commit.
+  // Once committed (departedRef=true), it's permanent regardless of future status changes.
   useEffect(() => {
-    if (
-      prevStatus &&
-      !DONE_STATUSES.includes(prevStatus) &&
-      DONE_STATUSES.includes(job.status)
-    ) {
-      const timer = setTimeout(() => {
-        setFlyingAway(true);
-        // Wait for the full slow fly-out before removing from grid
-        setTimeout(() => onFlyAway?.(job.id), 5000);
-      }, 1200);
-      return () => clearTimeout(timer);
-    }
-  }, [job.status, prevStatus, job.id, onFlyAway]);
+    if (departedRef.current) return; // already committed — nothing to do
+    if (!DONE_STATUSES.includes(job.status)) return; // not done yet
+
+    const timer = setTimeout(() => {
+      // Double-check we haven't been cancelled and job is still done
+      if (departedRef.current) return;
+      departedRef.current = true;
+      setFlyingAway(true);
+      // Wait for the full slow fly-out before removing from grid
+      setTimeout(() => onFlyAway?.(job.id), 5000);
+    }, 2000); // 2s debounce: must stay "done" for 2 full seconds
+
+    return () => clearTimeout(timer);
+  }, [job.status, job.id, onFlyAway]);
 
   const { text: statusText, icon: statusIcon, color: statusColor } = statusLabel(job);
   const isDrafting = job.current_step === "generate_draft" && job.status === "running";
@@ -532,22 +583,78 @@ function HexCell({
   const exitX = useRef(Math.sin(exitAngleRad.current) * rand.current.flyDist);
   const exitY = useRef(-Math.cos(exitAngleRad.current) * rand.current.flyDist);
 
-  // Stable fly-IN waypoints — curvy entry path (from random edge to center)
+  // Stable fly-IN waypoints — single smooth arc from random edge to center
   const flyInWaypoints = useRef(
-    generateSineWaypoints(entryX.current, entryY.current, 0, 0, 12, 35 + Math.random() * 25)
+    generateArcPath(entryX.current, entryY.current, 0, 0, 10, 60 + Math.random() * 60)
   );
   const flyInTimes = useRef(
-    Array.from({ length: 13 }, (_, i) => i / 12)
+    Array.from({ length: 11 }, (_, i) => i / 10)
   );
 
-  // Stable fly-OUT waypoints — 14 steps for very smooth curvy path
+  // Stable fly-OUT waypoints — single smooth arc drifting away
   const flyOutWaypoints = useRef(
-    generateSineWaypoints(0, 0, exitX.current, exitY.current, 14, rand.current.exitWobble)
+    generateArcPath(0, 0, exitX.current, exitY.current, 12, rand.current.exitWobble)
   );
 
   const flyOutTimes = useRef(
-    Array.from({ length: 15 }, (_, i) => i / 14)
+    Array.from({ length: 13 }, (_, i) => i / 12)
   );
+
+  // ── STABLE keyframe arrays for Framer Motion (prevent animation restart on re-render) ──
+  // These MUST be refs so the same array reference is used across renders.
+  // If these were inline arrays, every re-render would create new array references,
+  // causing Framer Motion to restart the keyframe animation from the beginning.
+  const flyOutScale = useRef([1, 1, 1, 0.98, 0.95, 0.90, 0.82, 0.70, 0.55, 0.38, 0.20, 0.08, 0]);
+  const flyOutOpacity = useRef([1, 1, 1, 1, 0.98, 0.94, 0.87, 0.75, 0.58, 0.38, 0.18, 0.06, 0]);
+  const flyInScale = useRef([0.12, 0.25, 0.42, 0.58, 0.72, 0.83, 0.91, 0.96, 0.99, 1.0, 1.0]);
+  const flyInOpacity = useRef([0, 0.20, 0.42, 0.60, 0.75, 0.86, 0.93, 0.97, 0.99, 1.0, 1.0]);
+  const flyInRotate = useRef(
+    [rand.current.entryRot, ...Array.from({ length: 10 }, (_, i) => rand.current.entryRot * (1 - (i + 1) / 10))]
+  );
+  const exitScale = useRef([1, 1, 0.97, 0.92, 0.84, 0.73, 0.60, 0.45, 0.30, 0.17, 0.07, 0.02, 0]);
+  const exitOpacity = useRef([1, 1, 0.97, 0.92, 0.84, 0.73, 0.60, 0.45, 0.30, 0.17, 0.07, 0.02, 0]);
+
+  // ── Stable animate objects — same reference across renders ──
+  const flyOutAnimate = useRef({
+    x: flyOutWaypoints.current.x,
+    y: flyOutWaypoints.current.y,
+    scale: flyOutScale.current,
+    opacity: flyOutOpacity.current,
+    rotate: rand.current.flyRot,
+  });
+  const restingAnimate = useRef({ x: 0, y: 0, scale: 1, opacity: 1, rotate: 0 });
+  const flyInAnimate = useRef({
+    x: flyInWaypoints.current.x,
+    y: flyInWaypoints.current.y,
+    scale: flyInScale.current,
+    opacity: flyInOpacity.current,
+    rotate: flyInRotate.current,
+  });
+  const exitAnimate = useRef({
+    x: flyOutWaypoints.current.x,
+    y: flyOutWaypoints.current.y,
+    scale: exitScale.current,
+    opacity: exitOpacity.current,
+    rotate: rand.current.flyRot,
+  });
+
+  // ── Stable transition objects ──
+  const flyOutTransition = useRef({
+    duration: 4.5,
+    times: flyOutTimes.current,
+    ease: [0.4, 0.0, 0.2, 1.0] as const,
+  });
+  const restingTransition = useRef({
+    type: "tween" as const,
+    duration: 0.4,
+    ease: [0.25, 0.1, 0.25, 1.0] as const,
+  });
+  const flyInTransition = useRef({
+    duration: 2.5,
+    times: flyInTimes.current,
+    ease: [0.4, 0.0, 0.2, 1.0] as const,
+    delay: rand.current.entryDelay,
+  });
 
   // Mark as arrived once the entry transition completes
   const handleAnimComplete = useCallback(() => {
@@ -564,49 +671,13 @@ function HexCell({
         opacity: 0,
         rotate: rand.current.entryRot,
       }}
-      animate={flyingAway ? {
-        // Fly-out: slow, curvy departure with gentle fade
-        x: flyOutWaypoints.current.x,
-        y: flyOutWaypoints.current.y,
-        scale: [1, 1.02, 1.0, 0.97, 0.93, 0.88, 0.82, 0.74, 0.64, 0.52, 0.40, 0.28, 0.15, 0.06, 0],
-        opacity: [1, 1, 1, 1, 0.98, 0.95, 0.9, 0.82, 0.7, 0.55, 0.4, 0.25, 0.12, 0.04, 0],
-        rotate: rand.current.flyRot,
-      } : hasArrived ? {
-        // Resting state — stationary
-        x: 0,
-        y: 0,
-        scale: 1,
-        opacity: 1,
-        rotate: 0,
-      } : {
-        // Fly-in: curvy sinusoidal entry path
-        x: flyInWaypoints.current.x,
-        y: flyInWaypoints.current.y,
-        scale: [0.15, 0.25, 0.40, 0.55, 0.68, 0.78, 0.86, 0.92, 0.96, 0.98, 0.99, 1.0, 1.0],
-        opacity: [0, 0.15, 0.35, 0.55, 0.70, 0.80, 0.88, 0.93, 0.96, 0.98, 0.99, 1.0, 1.0],
-        rotate: [rand.current.entryRot, ...Array.from({ length: 12 }, (_, i) => rand.current.entryRot * (1 - (i + 1) / 12))],
-      }}
-      exit={{
-        x: flyOutWaypoints.current.x,
-        y: flyOutWaypoints.current.y,
-        scale: [1, 1.0, 0.95, 0.88, 0.78, 0.65, 0.50, 0.35, 0.22, 0.12, 0.05, 0.02, 0.01, 0, 0],
-        opacity: [1, 1, 0.95, 0.88, 0.78, 0.65, 0.50, 0.35, 0.22, 0.12, 0.05, 0.02, 0, 0, 0],
-        rotate: rand.current.flyRot,
-      }}
-      transition={flyingAway ? {
-        duration: 4.5,           // Very slow, leisurely fly-out
-        times: flyOutTimes.current,
-        ease: [0.25, 0.0, 0.35, 1.0],
-      } : hasArrived ? {
-        type: "tween",
-        duration: 0.4,
-        ease: [0.25, 0.1, 0.25, 1.0],
-      } : {
-        duration: 2.5,            // Slow, graceful fly-in
-        times: flyInTimes.current,
-        ease: [0.25, 0.0, 0.35, 1.0],
-        delay: rand.current.entryDelay,
-      }}
+      animate={flyingAway ? flyOutAnimate.current
+        : hasArrived ? restingAnimate.current
+        : flyInAnimate.current}
+      exit={exitAnimate.current}
+      transition={flyingAway ? flyOutTransition.current
+        : hasArrived ? restingTransition.current
+        : flyInTransition.current}
       onAnimationComplete={handleAnimComplete}
       onClick={onClick}
       className={`cursor-pointer group ${flyingAway ? "bee-fly-away" : hasArrived ? "" : "bee-fly-in"}`}
@@ -819,8 +890,6 @@ export default function LiveDraftPanel({
 
   // ── Stable position map: jobId → Axial (persists across re-renders) ──
   const stablePositionMap = useRef<Map<string, Axial>>(new Map());
-  // Track vacant positions left by flown-away bees (for gap-filling)
-  const vacantPositions = useRef<Axial[]>([]);
   // Version counter — incremented when positions change (gap-fills) to force recompute
   const [positionVersion, setPositionVersion] = useState(0);
 
@@ -863,14 +932,60 @@ export default function LiveDraftPanel({
     }
   }, []);
 
-  // Reset fly-away tracking when jobs list changes (filter change brings them back)
-  const jobIdsKey = useMemo(() => jobs.map(j => j.id).sort().join(","), [jobs]);
+  // Clean up stale entries when jobs disappear from the list (e.g. filter change).
+  // When a job is removed from the list, clean up its position and flownAway entry.
+  // When a job that was previously flown-away comes back (was removed then re-added),
+  // it will naturally get a fresh position since its map entry was cleaned up.
+  const currentJobIds = useMemo(() => new Set(jobs.map(j => j.id)), [jobs]);
+  const prevJobIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    setFlownAway(new Set());
-    stablePositionMap.current.clear();
-    vacantPositions.current = [];
-    setPositionVersion(0);
-  }, [jobIdsKey]);
+    const prev = prevJobIdsRef.current;
+
+    // Clean up positions for jobs that left the list
+    for (const id of stablePositionMap.current.keys()) {
+      if (!currentJobIds.has(id)) {
+        stablePositionMap.current.delete(id);
+      }
+    }
+
+    // Clean up flownAway for jobs that left the list
+    setFlownAway(fa => {
+      let changed = false;
+      const next = new Set(fa);
+      for (const id of fa) {
+        if (!currentJobIds.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : fa;
+    });
+
+    // Jobs that were absent last render but are now present: ensure they're not in flownAway
+    // (handles filter toggle bringing back previously-removed jobs)
+    if (prev.size > 0) {
+      const reappeared: string[] = [];
+      for (const id of currentJobIds) {
+        if (!prev.has(id)) reappeared.push(id);
+      }
+      if (reappeared.length > 0) {
+        setFlownAway(fa => {
+          let changed = false;
+          const next = new Set(fa);
+          for (const id of reappeared) {
+            if (next.has(id)) {
+              next.delete(id);
+              stablePositionMap.current.delete(id);
+              changed = true;
+            }
+          }
+          return changed ? next : fa;
+        });
+      }
+    }
+
+    prevJobIdsRef.current = currentJobIds;
+  }, [currentJobIds]);
 
   // ── Sort jobs by priority (for initial assignment order only) ──
   const sorted = useMemo(() => {
@@ -1220,23 +1335,10 @@ export default function LiveDraftPanel({
               if (flownAway.has(entry.job.id)) return null;
               const px = axialToPixel(entry.q, entry.r, hexSize);
             return (
-              <motion.div
-                  key={entry.job.id}
-                  className="absolute"
-                  initial={false}
-                  animate={{
-                    x: px.x - hexSize,
-                    y: px.y - cellH / 2,
-                  }}
-                  transition={{
-                    type: "tween",
-                    duration: 2.5,
-                    ease: [0.25, 0.1, 0.25, 1.0],
-                  }}
-                style={{
-                  left: '50%',
-                  top: '50%',
-                }}
+              <HexSlot
+                key={entry.job.id}
+                targetX={px.x - hexSize}
+                targetY={px.y - cellH / 2}
               >
                 <HexCell
                     job={entry.job}
@@ -1246,7 +1348,7 @@ export default function LiveDraftPanel({
                     frame={frameData?.get(entry.job.id) || null}
                     onFlyAway={handleFlyAway}
                 />
-              </motion.div>
+              </HexSlot>
             );
           })}
           </AnimatePresence>

@@ -495,10 +495,14 @@ class DocsPipeline(Pipeline):
     uses_local_browser = False  # Uses API, not browser
 
     def can_handle(self, task_description: str) -> bool:
-        keywords = ["docs", "document", "google docs", "write a doc", "gdoc",
-                     "edit the doc", "edit my doc", "delete the doc", "rewrite the doc"]
+        import re
+        keywords = [
+            r"\bgoogle docs?\b", r"\bgdocs?\b", r"\bwrite a doc\b",
+            r"\bedit (the|my) doc\b", r"\bdelete the doc\b", r"\brewrite the doc\b",
+            r"\bcreate a document\b", r"\bedit.{0,10}document\b",
+        ]
         desc_lower = task_description.lower()
-        return any(kw in desc_lower for kw in keywords)
+        return any(re.search(kw, desc_lower) for kw in keywords)
 
     async def execute(
         self,

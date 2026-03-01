@@ -233,9 +233,16 @@ class BrowserAgent:
     async def _execute_task(self, max_steps: int | None = None) -> Any:
         """Run self._session.execute() with the configured instruction/model."""
         steps = max_steps if max_steps is not None else self.task.max_steps
+        # Append a URL-reporting suffix so the agent's completion message
+        # includes the final URL, which we can extract as an artifact/link.
+        enriched_instruction = (
+            self.task.instruction.rstrip()
+            + "\n\nIMPORTANT: When you complete the task, include the full URL "
+            "of the final page you navigated to in your completion message."
+        )
         return await self._session.execute(
             execute_options={
-                "instruction": self.task.instruction,
+                "instruction": enriched_instruction,
                 "max_steps": steps,
             },
             agent_config={
@@ -287,10 +294,11 @@ class BrowserAgent:
         actions = getattr(rd, "actions", [])
         return success, message, len(actions) if actions else 0
 
-    def _extract_artifacts_from_message(self, execute_message: str) -> list[Artifact]:
+    def _extract_artifacts_from_message(self, execute_message: str, final_url: str | None = None) -> list[Artifact]:
         """Build artifacts from the execute() result message (instant, no API call).
 
-        Parses the summary text and extracts any URLs mentioned.
+        Parses the summary text, extracts any URLs mentioned, and includes
+        the final browser URL if available.
         """
         artifacts: list[Artifact] = []
         if not execute_message:
@@ -304,11 +312,31 @@ class BrowserAgent:
 
         # Pull any URLs out of the message text
         urls = re.findall(r'https?://[^\s,)\"\']+', execute_message)
+        seen_urls = set()
         for url in urls[:5]:
+            clean = url.rstrip(".")
+            if clean not in seen_urls:
+                seen_urls.add(clean)
+                artifacts.append(Artifact(
+                    type="link",
+                    label="Link found",
+                    content=clean,
+                ))
+
+        # Include the final browser URL if it's meaningful and not already captured
+        if final_url and final_url not in ("about:blank", "") and final_url not in seen_urls:
             artifacts.append(Artifact(
                 type="link",
-                label="Link found",
-                content=url.rstrip("."),
+                label="Final page",
+                content=final_url,
+            ))
+
+        # If we still have no links, include the original task URL as a reference
+        if not seen_urls and not final_url and self.task.url:
+            artifacts.append(Artifact(
+                type="link",
+                label="Task URL",
+                content=self.task.url,
             ))
 
         return artifacts
@@ -443,8 +471,29 @@ class BrowserAgent:
                 elif hasattr(extracted_data, "__dict__"):
                     extracted_data = extracted_data.__dict__
 
+            # ── Try to capture the final browser URL ──
+            final_url: str | None = None
+            if success:
+                try:
+                    import asyncio as _aio
+                    url_result = await _aio.wait_for(
+                        self._session.extract(
+                            instruction="What is the current page URL shown in the browser address bar?",
+                            schema={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+                        ),
+                        timeout=8,
+                    )
+                    if hasattr(url_result, "data") and hasattr(url_result.data, "result"):
+                        raw = url_result.data.result
+                        if isinstance(raw, dict):
+                            final_url = raw.get("url")
+                        elif hasattr(raw, "url"):
+                            final_url = raw.url
+                except Exception:
+                    pass  # Non-critical — we'll still have the message-based artifacts
+
             # ── Build artifacts from the execute message (instant) ──
-            artifacts = self._extract_artifacts_from_message(message) if success else []
+            artifacts = self._extract_artifacts_from_message(message, final_url) if success else []
 
             elapsed = int(
                 (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
