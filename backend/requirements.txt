@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+aiosqlite
+google-auth-oauthlib
+google-api-python-client
+anthropic
+sse-starlette
+pydantic
+pydantic-settings
+python-dotenv
+cryptography

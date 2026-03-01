@@ -1,0 +1,20 @@
+[project]
+name = "treehacks-2026"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "anthropic>=0.79.0",
+    "fastapi>=0.129.0",
+    "google-api-python-client>=2.190.0",
+    "google-auth-oauthlib>=1.2.4",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "pyqt6",
+    "pyqt6-webengine",
+    "python-dotenv>=1.2.1",
+    "sse-starlette>=3.2.0",
+    "uvicorn[standard]>=0.40.0",
+]
