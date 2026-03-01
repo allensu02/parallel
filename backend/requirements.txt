@@ -9,5 +9,6 @@ pydantic
 pydantic-settings
 python-dotenv
 cryptography
-browser-use
-langchain-anthropic
+stagehand
+browserbase
+duckduckgo-search

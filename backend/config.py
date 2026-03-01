@@ -20,11 +20,25 @@ GOOGLE_REDIRECT_URI: str = os.getenv(
     "GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/callback"
 )
 GOOGLE_SCOPES: list[str] = [
+    # Gmail
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar.readonly",
+    # Calendar (read/write)
+    "https://www.googleapis.com/auth/calendar",
+    # Google Docs
+    "https://www.googleapis.com/auth/documents",
+    # Google Sheets
+    "https://www.googleapis.com/auth/spreadsheets",
+    # Google Slides
+    "https://www.googleapis.com/auth/presentations",
+    # Google Forms
+    "https://www.googleapis.com/auth/forms.body",
+    "https://www.googleapis.com/auth/forms.responses.readonly",
+    # Google Drive
+    "https://www.googleapis.com/auth/drive",
+    # Identity
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
@@ -71,3 +85,14 @@ SCREENCAST_QUALITY: int = int(os.getenv("SCREENCAST_QUALITY", "50"))
 SCREENCAST_MAX_WIDTH: int = int(os.getenv("SCREENCAST_MAX_WIDTH", "800"))
 SCREENCAST_MAX_HEIGHT: int = int(os.getenv("SCREENCAST_MAX_HEIGHT", "600"))
 MAX_VISIBLE_STREAMS: int = int(os.getenv("MAX_VISIBLE_STREAMS", "7"))
+
+# ---------------------------------------------------------------------------
+# Browserbase + Stagehand (generic browser agent / swarm fallback)
+# ---------------------------------------------------------------------------
+BROWSERBASE_API_KEY: str = os.getenv("BROWSERBASE_API_KEY", "")
+BROWSERBASE_PROJECT_ID: str = os.getenv("BROWSERBASE_PROJECT_ID", "")
+STAGEHAND_MODEL: str = os.getenv("STAGEHAND_MODEL", "anthropic/claude-sonnet-4-5")
+STAGEHAND_API_URL: str = os.getenv("STAGEHAND_API_URL", "https://api.stagehand.browserbase.com")
+SWARM_MAX_AGENTS: int = int(os.getenv("SWARM_MAX_AGENTS", "20"))
+SWARM_AGENT_TIMEOUT: int = int(os.getenv("SWARM_AGENT_TIMEOUT", "300"))
+SWARM_MAX_STEPS: int = int(os.getenv("SWARM_MAX_STEPS", "30"))

@@ -1,10 +1,12 @@
-"""Google API wrappers — Gmail and Calendar.
+"""Google API wrappers — Gmail, Calendar, Docs, Sheets, Slides, Forms, Drive.
 
-Provides a clean interface for reading/composing emails and
-querying calendar events using stored OAuth2 credentials.
+Provides a clean interface for interacting with all Google Workspace APIs
+using stored OAuth2 credentials.
 
 Performance notes:
-  - Gmail service is cached to avoid rebuild per call.
+  - Service objects are built fresh each time because httplib2 is NOT
+    thread-safe: sharing a service across thread-pool workers causes
+    SSL errors when concurrent batch requests re-use the same socket.
   - BatchHttpRequest is used for bulk operations (1 HTTP round-trip for N calls).
   - All synchronous google-api-python-client calls are offloaded to a thread
     pool via asyncio.run_in_executor so they never block the event loop.
@@ -121,6 +123,51 @@ async def get_calendar_service():
         return None
     from googleapiclient.discovery import build
     return build("calendar", "v3", credentials=creds)
+
+
+async def get_docs_service():
+    """Build a fresh Google Docs API client."""
+    creds = await _get_cached_creds()
+    if not creds:
+        return None
+    from googleapiclient.discovery import build
+    return build("docs", "v1", credentials=creds)
+
+
+async def get_sheets_service():
+    """Build a fresh Google Sheets API client."""
+    creds = await _get_cached_creds()
+    if not creds:
+        return None
+    from googleapiclient.discovery import build
+    return build("sheets", "v4", credentials=creds)
+
+
+async def get_slides_service():
+    """Build a fresh Google Slides API client."""
+    creds = await _get_cached_creds()
+    if not creds:
+        return None
+    from googleapiclient.discovery import build
+    return build("slides", "v1", credentials=creds)
+
+
+async def get_forms_service():
+    """Build a fresh Google Forms API client."""
+    creds = await _get_cached_creds()
+    if not creds:
+        return None
+    from googleapiclient.discovery import build
+    return build("forms", "v1", credentials=creds)
+
+
+async def get_drive_service():
+    """Build a fresh Google Drive API client."""
+    creds = await _get_cached_creds()
+    if not creds:
+        return None
+    from googleapiclient.discovery import build
+    return build("drive", "v3", credentials=creds)
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +528,51 @@ async def create_draft_api(thread_id: str, body_text: str, to: str = "", subject
         "draft_id": draft.get("id", ""),
         "message_id": draft.get("message", {}).get("id", ""),
     }
+
+
+async def delete_duplicate_drafts(thread_id: str, keep_draft_id: str) -> int:
+    """Delete any drafts for `thread_id` EXCEPT the one with `keep_draft_id`.
+
+    Returns the number of deleted drafts.
+    """
+    service = await get_gmail_service()
+    if not service:
+        return 0
+
+    try:
+        def _list_drafts():
+            return service.users().drafts().list(userId="me").execute()
+
+        result = await _run_sync(_list_drafts)
+        drafts = result.get("drafts", [])
+
+        deleted = 0
+        for d in drafts:
+            d_id = d.get("id", "")
+            if d_id == keep_draft_id:
+                continue  # keep this one
+
+            # Fetch draft detail to check if it belongs to this thread
+            try:
+                def _get_draft(did=d_id):
+                    return service.users().drafts().get(userId="me", id=did).execute()
+
+                detail = await _run_sync(_get_draft)
+                msg = detail.get("message", {})
+                if msg.get("threadId") == thread_id:
+                    def _delete_draft(did=d_id):
+                        service.users().drafts().delete(userId="me", id=did).execute()
+
+                    await _run_sync(_delete_draft)
+                    deleted += 1
+                    print(f"[GoogleAPI] Deleted duplicate draft {d_id} for thread {thread_id}")
+            except Exception as e:
+                print(f"[GoogleAPI] Error checking/deleting draft {d_id}: {e}")
+
+        return deleted
+    except Exception as e:
+        print(f"[GoogleAPI] Error listing drafts for dedup: {e}")
+        return 0
 
 
 # ---------------------------------------------------------------------------

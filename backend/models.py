@@ -63,8 +63,11 @@ STEP_NAMES: list[str] = [
 # ---------------------------------------------------------------------------
 
 class RunCreate(BaseModel):
+    # Gmail flow
     thread_ids: list[str] = Field(default_factory=list)
     thread_subjects: dict[str, str] = Field(default_factory=dict)
+    # Generic tasks (routed to pipelines)
+    tasks: list["TaskIn"] = Field(default_factory=list)
     # Legacy fallback
     max_threads: int | None = None
 
@@ -96,6 +99,10 @@ class JobOut(BaseModel):
     summary: str | None = None
     tokens_used: int = 0
     duration_ms: int = 0
+    # Pipeline fields
+    pipeline_type: str = "gmail"
+    task_instruction: str = ""
+    live_view_url: str = ""
 
 
 class StepOut(BaseModel):
@@ -150,3 +157,59 @@ class AnswerIn(BaseModel):
 class ApproveIn(BaseModel):
     action: str = "approve"  # "approve" or "discard"
     draft_text: str = ""  # optional edited draft
+
+
+# ---------------------------------------------------------------------------
+# Unified task submission
+# ---------------------------------------------------------------------------
+
+class TaskIn(BaseModel):
+    """A single generic task to be routed to the appropriate pipeline."""
+    description: str
+    pipeline_type: str = ""  # optional override; empty = auto-route via LLM
+    url: str = ""  # optional target URL
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Browser Swarm models (Browserbase auth + generic agent tracking)
+# ---------------------------------------------------------------------------
+
+class SwarmTaskIn(BaseModel):
+    """A single task for a browser agent."""
+    instruction: str
+    url: str = ""
+    max_steps: int = 20
+    timeout: float = 300
+    extract_schema: dict[str, Any] | None = None
+
+
+class SwarmCreate(BaseModel):
+    """Request body for launching a browser swarm."""
+    tasks: list[SwarmTaskIn]
+
+
+class SwarmOut(BaseModel):
+    id: str
+    status: str
+    created_at: str
+    finished_at: str | None = None
+    total_agents: int = 0
+    completed_agents: int = 0
+    failed_agents: int = 0
+
+
+class SwarmAgentOut(BaseModel):
+    id: str
+    swarm_id: str
+    task_url: str = ""
+    task_instruction: str = ""
+    status: str = "queued"
+    current_action: str = ""
+    session_id: str = ""
+    live_view_url: str = ""
+    result: str | None = None
+    error_msg: str | None = None
+    actions_taken: int = 0
+    started_at: str | None = None
+    finished_at: str | None = None

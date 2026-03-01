@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from backend import database as db
-from backend.models import RunCreate, RunOut, JobOut, StepOut, QuestionOut, AnswerIn, ApproveIn
+from backend.models import RunCreate, RunOut, JobOut, StepOut, QuestionOut, AnswerIn, ApproveIn, TaskIn
 from backend.agent.engine import start_run, notify_answer, notify_approval, cancel_run
 from backend.agent.screencast import set_visible_jobs
 
@@ -22,11 +22,14 @@ router = APIRouter()
 @router.post("", response_model=RunOut)
 async def create_run(body: RunCreate):
     run = await db.create_run()
-    # Start the agent engine in the background with selected thread IDs
+    # Convert TaskIn models to dicts for the engine
+    generic_tasks = [t.model_dump() for t in body.tasks] if body.tasks else None
+    # Start the agent engine in the background
     asyncio.create_task(start_run(
         run["id"],
         thread_ids=body.thread_ids or None,
         thread_subjects=body.thread_subjects or None,
+        generic_tasks=generic_tasks,
     ))
     return RunOut(**run)
 
@@ -137,6 +140,9 @@ async def list_jobs(run_id: str):
             summary=j.get("summary"),
             tokens_used=j.get("tokens_used", 0),
             duration_ms=duration,
+            pipeline_type=j.get("pipeline_type", "gmail"),
+            task_instruction=j.get("task_instruction", ""),
+            live_view_url=j.get("live_view_url", ""),
         ))
     return result
 

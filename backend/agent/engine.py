@@ -1,14 +1,11 @@
-"""Agent engine — orchestrates the step machine for each email thread.
+"""Agent engine — orchestrates task execution across all pipelines.
 
-Pipeline:
-1. Acquire dedicated browser page + start screencast
-2. Fetch thread content via Gmail API (fast) while browser shows the email
-3. Classify intent via LLM
-4. Check if user input is needed → pause if so
-5. Generate draft via streaming LLM (tokens sent to frontend live)
-6. Visual compose: navigate to thread, click reply, type draft in real Chrome
-7. Wait for user approval
-8. On approval: save draft via Gmail API
+Supports two modes:
+1. Gmail email pipeline (thread_ids): deterministic Playwright-based workflow
+2. Generic tasks (free-text descriptions): routed to specialized or generic pipelines
+
+The engine dispatches each job to the appropriate pipeline based on the
+pipeline_type field, which is set during job creation by the task router.
 """
 
 from __future__ import annotations
@@ -147,10 +144,12 @@ async def _step_fetch_thread_api(thread_id: str) -> dict:
     return await fetch_thread_content_api(thread_id)
 
 
-async def _step_compose_via_api(draft_text: str, thread_id: str) -> bool:
+async def _step_compose_via_api(draft_text: str, thread_id: str) -> dict | None:
     from backend.services.google_api import create_draft_api
     result = await create_draft_api(thread_id, draft_text)
-    return bool(result and result.get("draft_id"))
+    if not result or not result.get("draft_id"):
+        raise RuntimeError("Gmail API did not return a draft_id")
+    return result
 
 
 async def _step_check_needs_info(subject: str, sender: str, messages: list[dict]) -> tuple[bool, str]:
@@ -327,37 +326,31 @@ async def _visual_compose_in_browser(page: Page, thread_id: str, draft_text: str
     await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "clicking_reply"})
     reply_clicked = False
 
-    # First try keyboard shortcut 'r' (most reliable in Gmail)
-    try:
-        # Click on the page body first to ensure focus is on Gmail
-        await page.click('body', timeout=2000)
-        await page.wait_for_timeout(300)
-        await page.keyboard.press("r")
-        await page.wait_for_timeout(1500)
+    _COMPOSE_SELECTORS = [
+        'div[aria-label="Message Body"][contenteditable="true"]',
+        'div[role="textbox"][aria-label="Message Body"]',
+        'div[contenteditable="true"][g_editable="true"]',
+    ]
 
-        # Check if compose box appeared
-        compose_check = page.locator(
-            'div[aria-label="Message Body"][contenteditable="true"], '
-            'div[role="textbox"][aria-label="Message Body"], '
-            'div[contenteditable="true"][g_editable="true"]'
-        ).first
+    # Check if compose box is ALREADY open (avoids re-triggering reply)
+    for sel in _COMPOSE_SELECTORS:
         try:
-            await compose_check.wait_for(state="visible", timeout=3000)
-            reply_clicked = True
-            print(f"[Engine] Job {job_id}: Reply opened via keyboard shortcut")
+            el = page.locator(sel).first
+            if await el.is_visible():
+                reply_clicked = True
+                print(f"[Engine] Job {job_id}: Compose box already open")
+                break
         except Exception:
-            pass
-    except Exception:
-        pass
+            continue
 
-    # Fallback: click Reply button
     if not reply_clicked:
+        # Try clicking the Reply button directly (safer than keyboard shortcut)
         for sel in [
             '[data-tooltip="Reply"]',
             'div[role="button"][data-tooltip*="Reply"]',
-            'span[role="link"]:has-text("Reply")',
-            '.ams.bkH',
             'div[aria-label="Reply"]',
+            '.ams.bkH',
+            'span[role="link"]:has-text("Reply")',
         ]:
             try:
                 btn = page.locator(sel).first
@@ -370,22 +363,42 @@ async def _visual_compose_in_browser(page: Page, thread_id: str, draft_text: str
                 continue
 
     if not reply_clicked:
-        print(f"[Engine] Job {job_id}: Could not find Reply button — trying 'r' shortcut again")
+        # Last resort: keyboard shortcut 'r' — but click on the email subject
+        # area (NOT body) to avoid hitting Smart Reply chips
         try:
+            # Focus the thread header area, far from Smart Reply buttons
+            header = page.locator('h2[data-thread-perm-id], div.ha h2, div.nH .hP').first
+            try:
+                await header.click(timeout=2000)
+            except Exception:
+                # If header not found, click top of page to avoid Smart Reply
+                await page.mouse.click(400, 150)
+            await page.wait_for_timeout(300)
             await page.keyboard.press("r")
+            await page.wait_for_timeout(1500)
+
+            for sel in _COMPOSE_SELECTORS:
+                try:
+                    el = page.locator(sel).first
+                    await el.wait_for(state="visible", timeout=3000)
+                    reply_clicked = True
+                    print(f"[Engine] Job {job_id}: Reply opened via keyboard shortcut")
+                    break
+                except Exception:
+                    continue
         except Exception:
             pass
+
+    if not reply_clicked:
+        print(f"[Engine] Job {job_id}: Could not open Reply — continuing anyway")
 
     await page.wait_for_timeout(1000)
 
     # Type draft in compose box
     await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "typing_draft"})
     compose_box = None
-    for sel in [
-        'div[aria-label="Message Body"][contenteditable="true"]',
-        'div[role="textbox"][aria-label="Message Body"]',
+    for sel in _COMPOSE_SELECTORS + [
         'div.Am.Al.editable',
-        'div[contenteditable="true"][g_editable="true"]',
         'div[contenteditable="true"]',
     ]:
         try:
@@ -399,7 +412,14 @@ async def _visual_compose_in_browser(page: Page, thread_id: str, draft_text: str
 
     if compose_box:
         await compose_box.click()
-        await page.wait_for_timeout(300)
+        await page.wait_for_timeout(200)
+
+        # CLEAR any pre-existing content (Smart Reply text, stale drafts, etc.)
+        await page.keyboard.press("Meta+a")   # Select all (Cmd+A / Ctrl+A)
+        await page.wait_for_timeout(100)
+        await page.keyboard.press("Backspace")
+        await page.wait_for_timeout(200)
+
         words = draft_text.split(" ")
         for i, word in enumerate(words):
             if _is_cancelled(run_id):
@@ -413,26 +433,262 @@ async def _visual_compose_in_browser(page: Page, thread_id: str, draft_text: str
         print(f"[Engine] Job {job_id}: Could not find compose box — draft NOT typed visually")
 
     await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "draft_typed"})
-    await page.wait_for_timeout(500)
+    await page.wait_for_timeout(600)
+
+    # ── Nuke the compose box so Gmail doesn't auto-save a duplicate draft.
+    # Strategy: clear ALL text first (empty compose = Gmail deletes auto-saved
+    # draft), then discard/close the compose box. The real draft is saved via
+    # the Gmail API in the next step.
+    try:
+        # Step 1: Clear all text from the compose box. This is critical —
+        # Gmail auto-saves every ~2s, so a draft may already exist on the
+        # server. Clearing the text forces Gmail to delete that auto-saved
+        # draft on its next auto-save cycle.
+        for sel in _COMPOSE_SELECTORS + ['div.Am.Al.editable', 'div[contenteditable="true"]']:
+            try:
+                el = page.locator(sel).first
+                if await el.is_visible():
+                    await el.click()
+                    await page.wait_for_timeout(100)
+                    # Select all + delete
+                    await page.keyboard.press("Meta+a")
+                    await page.wait_for_timeout(80)
+                    await page.keyboard.press("Backspace")
+                    await page.wait_for_timeout(100)
+                    # Double-check it's empty — select all + delete again
+                    await page.keyboard.press("Meta+a")
+                    await page.wait_for_timeout(80)
+                    await page.keyboard.press("Backspace")
+                    print(f"[Engine] Job {job_id}: Cleared compose box text")
+                    break
+            except Exception:
+                continue
+
+        # Wait for Gmail to register the empty compose (auto-save triggers)
+        await page.wait_for_timeout(1500)
+
+        # Step 2: Discard the compose box
+        discard_clicked = False
+        for sel in [
+            'div[data-tooltip="Discard draft"]',
+            'div[aria-label="Discard draft"]',
+            'div[command="+Shift+d"]',
+        ]:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible():
+                    await btn.click()
+                    discard_clicked = True
+                    print(f"[Engine] Job {job_id}: Discarded compose box via: {sel}")
+                    break
+            except Exception:
+                continue
+
+        if not discard_clicked:
+            # Fallback: Escape to close compose — Gmail may ask to confirm
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(400)
+            try:
+                # Handle "Discard?" confirmation dialog
+                confirm_btn = page.locator('button:has-text("Discard"), button:has-text("OK")').first
+                if await confirm_btn.is_visible():
+                    await confirm_btn.click()
+                    print(f"[Engine] Job {job_id}: Discarded via Escape + confirm")
+                else:
+                    # No confirmation needed — compose closed
+                    print(f"[Engine] Job {job_id}: Compose closed via Escape (no confirm)")
+            except Exception:
+                pass
+
+        await page.wait_for_timeout(400)
+    except Exception as discard_err:
+        print(f"[Engine] Job {job_id}: Discard compose failed (non-fatal): {discard_err}")
 
 
 # ---------------------------------------------------------------------------
-# Job handler — full pipeline for one email thread
+# GSuite stub executor — uses local Playwright browser (has Google cookies)
+# ---------------------------------------------------------------------------
+
+
+async def gsuite_stub_execute(
+    run_id: str,
+    job_id: str,
+    params: dict,
+    default_url: str,
+    pipeline_type: str = "generic",
+) -> None:
+    """Shared executor for GSuite pipeline stubs (slides, sheets, docs, etc.).
+
+    Uses the local Playwright browser harness which already has Google auth
+    via the persistent Chrome profile. This avoids the Browserbase auth issue
+    where the remote browser doesn't have Google cookies.
+    """
+    instruction = params.get("instruction", params.get("description", ""))
+    url = params.get("url", default_url)
+
+    await db.update_job(job_id, status="running", current_step="browser_navigate", started_at=_now())
+    await _emit(run_id, "job.started", {"job_id": job_id, "pipeline_type": pipeline_type})
+
+    page = None
+    _sem_held = True
+    await _browser_sem.acquire()
+    try:
+        # Ensure harness is started and authenticated
+        if not harness._started:
+            await harness.start()
+        if not harness.authenticated:
+            await harness.ensure_gmail_auth()
+
+        page = await harness.acquire_page()
+
+        # Start screencast so the user sees live browser
+        await sc.start_screencast(page, job_id, run_id)
+
+        # Navigate to the GSuite URL (authenticated via shared Google cookies)
+        await db.update_job(job_id, current_step="navigating")
+        await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "navigating"})
+        print(f"[Engine] GSuite job {job_id}: Navigating to {url}")
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        except Exception as nav_err:
+            print(f"[Engine] GSuite job {job_id}: Navigation error (non-fatal): {nav_err}")
+
+        # Handle Google account chooser if redirected
+        await _handle_account_chooser(page)
+        await page.wait_for_timeout(3000)
+
+        # Update status — page is loaded, show it to user
+        await db.update_job(job_id, current_step="page_loaded")
+        await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "page_loaded"})
+        print(f"[Engine] GSuite job {job_id}: Page loaded at {page.url[:80]}")
+
+        # Keep the page alive for the user to see the screencast (30 seconds)
+        # In the future, this is where LLM-guided Playwright interactions go
+        for i in range(15):
+            if _is_cancelled(run_id):
+                break
+            await page.wait_for_timeout(2000)
+
+        # Mark completed
+        await db.update_job(
+            job_id,
+            status="completed",
+            current_step="done",
+            summary=f"Navigated to {pipeline_type.title()} — {instruction[:100]}",
+            finished_at=_now(),
+        )
+        await db.increment_run_counter(run_id, "completed_jobs")
+        await _emit(run_id, "job.completed", {
+            "job_id": job_id,
+            "summary": f"Opened {pipeline_type} page",
+        })
+
+    except Exception as exc:
+        err_msg = f"{type(exc).__name__}: {exc}"
+        print(f"[Engine] GSuite job {job_id} FAILED: {err_msg}")
+        print(traceback.format_exc()[-500:])
+        await db.update_job(
+            job_id, status="failed", current_step="done",
+            error_msg=err_msg, finished_at=_now(),
+        )
+        await db.increment_run_counter(run_id, "failed_jobs")
+        await _emit(run_id, "job.failed", {"job_id": job_id, "error": err_msg})
+    finally:
+        await sc.stop_screencast(job_id)
+        if page:
+            await harness.release_page(page)
+        if _sem_held:
+            _browser_sem.release()
+
+
+# ---------------------------------------------------------------------------
+# Job dispatcher — routes to the correct pipeline based on pipeline_type
 # ---------------------------------------------------------------------------
 
 
 async def _process_job(job_data: dict) -> None:
+    """Dispatch a job to the correct pipeline based on its pipeline_type."""
+    pipeline_type = job_data.get("pipeline_type", "gmail")
+
+    if pipeline_type == "gmail":
+        # Legacy Gmail path — use the optimized inline handler
+        await _process_gmail_job_wrapper(job_data)
+    else:
+        # All other pipelines — use the pipeline registry
+        await _process_pipeline_job(job_data)
+
+
+async def _process_pipeline_job(job_data: dict) -> None:
+    """Execute a job via the pipeline registry (non-Gmail pipelines)."""
+    from backend.agent.pipelines import get_pipeline
+
     run_id = job_data["run_id"]
     job_id = job_data["job_id"]
-    thread_id = job_data["thread_id"]
-    subject = job_data.get("subject", "")
+    pipeline_type = job_data.get("pipeline_type", "generic")
 
     if _is_cancelled(run_id):
         await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
         await db.increment_run_counter(run_id, "skipped_jobs")
         return
 
-    await db.update_job(job_id, status="running", started_at=_now(), attempt=job_data.get("attempt", 1))
+    try:
+        pipeline = get_pipeline(pipeline_type)
+        params = job_data.get("params", {})
+        # Ensure instruction is set
+        params.setdefault("instruction", job_data.get("task_instruction", ""))
+        params.setdefault("description", job_data.get("task_instruction", ""))
+        params.setdefault("url", job_data.get("url", ""))
+
+        await pipeline.execute(run_id, job_id, params)
+
+    except Exception as exc:
+        err_msg = f"{type(exc).__name__}: {exc}"
+        print(f"[Engine] Pipeline job {job_id} ({pipeline_type}) FAILED: {err_msg}")
+        print(traceback.format_exc()[-500:])
+
+        await db.update_job(
+            job_id,
+            status="failed",
+            current_step="done",
+            error_msg=err_msg,
+            finished_at=_now(),
+        )
+        await db.increment_run_counter(run_id, "failed_jobs")
+        await _emit(run_id, "job.failed", {"job_id": job_id, "error": err_msg})
+
+
+async def _process_gmail_job_wrapper(job_data: dict) -> None:
+    """Wrapper to call _process_gmail_job with the expected signature."""
+    await _process_gmail_job(
+        run_id=job_data["run_id"],
+        job_id=job_data["job_id"],
+        thread_id=job_data["thread_id"],
+        subject=job_data.get("subject", ""),
+        attempt=job_data.get("attempt", 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gmail job handler — full pipeline for one email thread
+# ---------------------------------------------------------------------------
+
+
+async def _process_gmail_job(
+    run_id: str,
+    job_id: str,
+    thread_id: str,
+    subject: str = "",
+    attempt: int = 1,
+) -> None:
+    """Process a single Gmail email thread through the full pipeline."""
+
+    if _is_cancelled(run_id):
+        await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
+        await db.increment_run_counter(run_id, "skipped_jobs")
+        return
+
+    await db.update_job(job_id, status="running", started_at=_now(), attempt=attempt)
     await _emit(run_id, "job.started", {"job_id": job_id, "thread_id": thread_id})
     print(f"[Engine] Job {job_id}: Started (thread={thread_id[:12]}..., subject={subject[:40]})")
 
@@ -557,39 +813,35 @@ async def _process_job(job_data: dict) -> None:
         vc_elapsed = int((datetime.now(timezone.utc) - vc_start).total_seconds() * 1000)
         await _emit(run_id, "step.completed", {"job_id": job_id, "step": "visual_compose", "step_id": "", "duration_ms": vc_elapsed})
 
-        # ── Step 5: Wait for user approval ──
-        await db.update_job(job_id, status="pending_approval", current_step="pending_approval")
-        await _emit(run_id, "job.pending_approval", {
-            "job_id": job_id, "draft_text": draft_text, "subject": subject,
-        })
+        # ── Step 5: Auto-approve — skip manual review, user can review drafts later ──
+        final_draft = draft_text
 
-        evt = asyncio.Event()
-        _approval_events[job_id] = evt
-        try:
-            await asyncio.wait_for(evt.wait(), timeout=3600)
-            approval = _approval_data.get(job_id, {})
-        except asyncio.TimeoutError:
-            approval = {"action": "discard"}
-        finally:
-            _approval_events.pop(job_id, None)
-            _approval_data.pop(job_id, None)
-
-        action = approval.get("action", "discard")
-        final_draft = approval.get("draft_text", draft_text)
-
-        if action == "discard" or _is_cancelled(run_id):
+        if _is_cancelled(run_id):
             await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
             await db.increment_run_counter(run_id, "skipped_jobs")
-            await _emit(run_id, "job.skipped", {"job_id": job_id, "reason": "discarded"})
+            await _emit(run_id, "job.skipped", {"job_id": job_id, "reason": "cancelled"})
             return
 
-        # ── Step 5: Save draft via Gmail API ──
-        await _run_step(
+        # ── Step 6: Save draft via Gmail API ──
+        api_result = await _run_step(
             run_id, job_id, "save_draft",
             _step_compose_via_api, final_draft, thread_id,
             semaphore=_api_sem, timeout=15,
         )
-        await db.update_job(job_id, draft_id="api-draft")
+        api_draft_id = ""
+        if isinstance(api_result, dict):
+            api_draft_id = api_result.get("draft_id", "")
+        await db.update_job(job_id, draft_id=api_draft_id or "api-draft")
+
+        # ── Step 6b: Delete any duplicate drafts from visual compose auto-save ──
+        if api_draft_id:
+            try:
+                from backend.services.google_api import delete_duplicate_drafts
+                deleted = await delete_duplicate_drafts(thread_id, api_draft_id)
+                if deleted > 0:
+                    print(f"[Engine] Job {job_id}: Cleaned up {deleted} duplicate draft(s)")
+            except Exception as dedup_err:
+                print(f"[Engine] Job {job_id}: Draft dedup failed (non-fatal): {dedup_err}")
 
         # ── Done ──
         await db.update_job(job_id, status="completed", current_step="done", finished_at=_now())
@@ -608,7 +860,6 @@ async def _process_job(job_data: dict) -> None:
 
     except Exception as exc:
         err_msg = f"{type(exc).__name__}: {exc}"
-        attempt = job_data.get("attempt", 1)
         print(f"[Engine] Job {job_id} ERROR (attempt {attempt}/{MAX_RETRIES}): {err_msg}")
         print(traceback.format_exc()[-800:])
 
@@ -627,8 +878,7 @@ async def _process_job(job_data: dict) -> None:
             _browser_sem.release()
             _sem_held = False
             await asyncio.sleep(backoff)
-            job_data["attempt"] = attempt + 1
-            await _process_job(job_data)
+            await _process_gmail_job(run_id, job_id, thread_id, subject, attempt + 1)
             return
         else:
             print(f"[Engine] Job {job_id}: FAILED permanently after {attempt} attempts")
@@ -644,50 +894,202 @@ async def _process_job(job_data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Gmail task expansion — fetches inbox and creates 1 job per email thread
+# ---------------------------------------------------------------------------
+
+
+async def _expand_gmail_task(
+    run_id: str,
+    description: str,
+    params: dict,
+) -> list[dict]:
+    """When a user submits a natural-language Gmail task (e.g. 'reply to my
+    unread emails'), fetch the inbox and expand into individual per-email jobs.
+
+    Returns a list of job_items ready for _process_job dispatch.
+    """
+    from backend.services.google_api import fetch_inbox_threads_api
+
+    # Determine how many threads to fetch from the description
+    max_threads = params.get("max_threads", 20)
+    print(f"[Engine] Expanding Gmail task: '{description[:60]}...' (max_threads={max_threads})")
+
+    try:
+        threads = await fetch_inbox_threads_api(max_results=max_threads)
+    except Exception as exc:
+        print(f"[Engine] Gmail expansion failed — couldn't fetch inbox: {exc}")
+        # Fall back to creating a single generic job with the error
+        job = await db.create_job(run_id, "", f"Gmail: {description[:80]}")
+        await db.update_job(
+            job["id"],
+            pipeline_type="gmail",
+            task_instruction=description,
+            subject=f"Gmail: {description[:80]}",
+            status="failed",
+            error_msg=f"Could not fetch inbox: {exc}",
+            finished_at=_now(),
+        )
+        await db.increment_run_counter(run_id, "failed_jobs")
+        return []
+
+    if not threads:
+        print("[Engine] Gmail expansion: inbox is empty, no jobs to create")
+        return []
+
+    # Start browser harness for Gmail jobs
+    if not harness._started:
+        await harness.start()
+    if not harness.authenticated:
+        await harness.ensure_gmail_auth()
+
+    job_items = []
+    for thread in threads:
+        tid = thread["id"]
+        subj = thread.get("subject", "")[:100]
+
+        job = await db.create_job(run_id, tid, subj)
+        if job["status"] == "skipped":
+            continue
+
+        await db.update_job(
+            job["id"],
+            pipeline_type="gmail",
+            task_instruction=description,
+        )
+
+        job_items.append({
+            "run_id": run_id,
+            "job_id": job["id"],
+            "thread_id": tid,
+            "subject": subj,
+            "attempt": 1,
+            "pipeline_type": "gmail",
+        })
+
+    print(f"[Engine] Gmail expansion: created {len(job_items)} jobs from inbox")
+    return job_items
+
+
+# ---------------------------------------------------------------------------
 # Run orchestrator
 # ---------------------------------------------------------------------------
 
 
-async def start_run(run_id: str, thread_ids: list[str] | None = None, thread_subjects: dict[str, str] | None = None) -> None:
-    try:
-        # Ensure headless browser is running
-        if not harness._started:
-            await harness.start()
+async def start_run(
+    run_id: str,
+    thread_ids: list[str] | None = None,
+    thread_subjects: dict[str, str] | None = None,
+    generic_tasks: list[dict] | None = None,
+) -> None:
+    """Start a run with either Gmail thread_ids, generic tasks, or both.
 
-        # Quick auth check
-        if not harness.authenticated:
-            await harness.ensure_gmail_auth()
+    Args:
+        run_id: The run identifier (already created in DB).
+        thread_ids: List of Gmail thread IDs (creates gmail pipeline jobs).
+        thread_subjects: Map of thread_id -> subject for display.
+        generic_tasks: List of dicts with keys: description, pipeline_type?, url?, params?
+    """
+    try:
+        has_gmail = bool(thread_ids)
+        has_generic = bool(generic_tasks)
+
+        # Start browser harness eagerly if we have explicit Gmail thread IDs.
+        # (For generic tasks routed to gmail, _expand_gmail_task starts it lazily.)
+        if has_gmail:
+            if not harness._started:
+                await harness.start()
+            if not harness.authenticated:
+                await harness.ensure_gmail_auth()
 
         await db.update_run(run_id, status="running")
         await _emit(run_id, "run.started", {"run_id": run_id})
-        print(f"[Engine] Run {run_id}: Started (auth={harness.authenticated})")
+        print(f"[Engine] Run {run_id}: Started (gmail={has_gmail}, generic={has_generic})")
 
-        if not thread_ids:
+        if not has_gmail and not has_generic:
             await db.update_run(run_id, status="completed", finished_at=_now())
             await _emit(run_id, "run.completed", {"run_id": run_id, "total": 0, "completed": 0, "failed": 0})
             return
 
-        subjects = thread_subjects or {}
-        await db.update_run(run_id, total_jobs=len(thread_ids))
-        await _emit(run_id, "run.threads_loaded", {"run_id": run_id, "count": len(thread_ids)})
-
-        # Create all jobs
         job_items = []
-        for tid in thread_ids:
-            subj = subjects.get(tid, "")
-            job = await db.create_job(run_id, tid, subj[:100])
-            if job["status"] == "skipped":
-                continue
-            job_items.append({
-                "run_id": run_id,
-                "job_id": job["id"],
-                "thread_id": tid,
-                "subject": subj,
-                "attempt": 1,
-            })
 
-        await _emit(run_id, "run.jobs_queued", {"run_id": run_id, "count": len(job_items)})
-        print(f"[Engine] Run {run_id}: Launching {len(job_items)} jobs (browser pool: {BROWSER_POOL_SIZE}, LLM concurrency: {LLM_CONCURRENCY})")
+        # --- Gmail jobs ---
+        if thread_ids:
+            subjects = thread_subjects or {}
+            for tid in thread_ids:
+                subj = subjects.get(tid, "")
+                job = await db.create_job(run_id, tid, subj[:100])
+                if job["status"] == "skipped":
+                    continue
+                # Set pipeline_type on the job
+                await db.update_job(job["id"], pipeline_type="gmail")
+                job_items.append({
+                    "run_id": run_id,
+                    "job_id": job["id"],
+                    "thread_id": tid,
+                    "subject": subj,
+                    "attempt": 1,
+                    "pipeline_type": "gmail",
+                })
+
+        # --- Generic / routed tasks ---
+        if generic_tasks:
+            from backend.agent.router import route_task
+
+            for task_dict in generic_tasks:
+                description = task_dict.get("description", "")
+                explicit_type = task_dict.get("pipeline_type", "")
+                url = task_dict.get("url", "")
+
+                # Route the task if no explicit type
+                if explicit_type:
+                    routing = {
+                        "pipeline_type": explicit_type,
+                        "params": {
+                            "instruction": description,
+                            "description": description,
+                            "url": url,
+                            **task_dict.get("params", {}),
+                        },
+                    }
+                else:
+                    routing = await route_task(description, url)
+
+                pipeline_type = routing["pipeline_type"]
+                params = routing["params"]
+
+                # ── Gmail expansion: fetch inbox and create 1 job per email ──
+                if pipeline_type == "gmail":
+                    gmail_jobs = await _expand_gmail_task(run_id, description, params)
+                    job_items.extend(gmail_jobs)
+                    continue
+
+                # Create a job record (thread_id is empty for non-Gmail tasks)
+                job = await db.create_job(run_id, "", description[:100])
+                if job["status"] == "skipped":
+                    continue
+
+                await db.update_job(
+                    job["id"],
+                    pipeline_type=pipeline_type,
+                    task_instruction=description,
+                    subject=description[:100],
+                )
+
+                job_items.append({
+                    "run_id": run_id,
+                    "job_id": job["id"],
+                    "thread_id": "",
+                    "subject": description[:100],
+                    "task_instruction": description,
+                    "pipeline_type": pipeline_type,
+                    "params": params,
+                    "attempt": 1,
+                })
+
+        total = len(job_items)
+        await db.update_run(run_id, total_jobs=total)
+        await _emit(run_id, "run.jobs_queued", {"run_id": run_id, "count": total})
+        print(f"[Engine] Run {run_id}: Launching {total} jobs (browser pool: {BROWSER_POOL_SIZE}, LLM concurrency: {LLM_CONCURRENCY})")
 
         # Launch all jobs as concurrent tasks
         tasks = [asyncio.create_task(_process_job(item)) for item in job_items]

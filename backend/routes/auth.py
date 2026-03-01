@@ -165,6 +165,10 @@ async def auth_callback(code: str = "", error: str = ""):
         raise HTTPException(status_code=400, detail="No authorization code received")
 
     try:
+        import os
+        # Google returns the union of old + new scopes when include_granted_scopes
+        # is used, which causes a scope mismatch error. Disable the check.
+        os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
         flow = _build_flow()
         flow.fetch_token(code=code)
         creds = flow.credentials

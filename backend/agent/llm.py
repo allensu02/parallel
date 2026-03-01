@@ -83,7 +83,7 @@ _CLASSIFY_AND_CHECK_PROMPT = """\
 You are an email triage assistant. Given an email thread, do TWO things:
 
 1. Classify the required action as reply, ignore, or escalate.
-2. If the action is "reply", determine whether drafting a reply requires information only the user would know (e.g. availability for meetings, personal decisions, RSVPs).
+2. If the action is "reply", determine whether you should ask the user a question before drafting. You should almost ALWAYS ask a question — the goal is to write the best possible reply, and that requires understanding the user's intent, preferences, and context.
 
 Respond in EXACTLY this format (three lines):
 ACTION: reply OR ignore OR escalate
@@ -95,9 +95,13 @@ Rules for ACTION:
 - "ignore": Notification, newsletter, automated — no response needed.
 - "escalate": Sensitive topics (legal, financial, HR) needing human review.
 
-Rules for NEEDS_INFO:
-- "yes" only if the reply genuinely requires personal info (availability, decisions, preferences).
-- "no" for thank-you emails, simple acknowledgements, informational replies.
+Rules for NEEDS_INFO — be AGGRESSIVE about asking questions:
+- Default to "yes" for almost all replies. A quick question ensures the draft matches what the user actually wants to say.
+- "yes" for: meeting requests, invitations, RSVPs, scheduling, decisions, opinions, project updates, feedback requests, introductions, proposals, questions that could be answered multiple ways, anything where tone/stance matters.
+- "yes" if there's ANY ambiguity about what the user would want to convey.
+- "no" ONLY for truly trivial cases: simple "thanks for letting me know" acknowledgements where the reply is obvious and there's zero ambiguity.
+- When in doubt, ask. It's always better to ask than to guess wrong.
+- Ask specific, concise questions. Example: "This is a meeting invite for Friday 3pm — can you attend? Any scheduling conflicts?"
 
 Email thread:
 Subject: {subject}
@@ -380,20 +384,22 @@ def _local_summary(draft_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _NEEDS_INFO_PROMPT = """\
-You are an email triage assistant. Determine if drafting a reply to this email \
-requires information that only the recipient would know.
+You are an email triage assistant. Before drafting a reply, you should almost \
+ALWAYS ask the user a question to make sure the reply matches their intent.
 
-Examples of when info IS needed:
-- Calendar invites / meeting requests (need to know availability)
-- RSVPs (need to know if attending)
-- Questions about personal preferences
-- Requests that need a specific decision
+Ask a question whenever:
+- The email involves scheduling, meetings, invitations, RSVPs
+- There's a decision to make (yes/no, option A vs B)
+- The sender is asking for an opinion, feedback, or preference
+- The reply could go in multiple directions depending on context
+- The tone or stance of the reply matters
+- There's any project, task, or commitment being discussed
+- The user might have additional context that would improve the reply
 
-Examples of when info is NOT needed:
-- Thank you emails
-- Informational updates
-- Simple acknowledgements
-- Questions you can give a generic helpful answer to
+Only skip questions for truly trivial cases like "thanks for the update" where \
+the reply is completely obvious and there's zero ambiguity.
+
+When in doubt, ASK. It's always better to ask than to guess.
 
 Email:
 Subject: {subject}
@@ -402,7 +408,7 @@ Content: {content}
 
 Respond in EXACTLY this format (two lines):
 NEEDS_INFO: yes OR no
-QUESTION: (if yes, write the specific question to ask the user, else write "none")"""
+QUESTION: (if yes, write a specific, concise question to ask the user, else write "none")"""
 
 
 async def check_needs_info(

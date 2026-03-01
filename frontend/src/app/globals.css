@@ -1,21 +1,22 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-background: #1a1510;
-  --color-foreground: #f5e6c8;
-  --color-surface: #231e16;
-  --color-surface-2: #2d2619;
-  --color-border: #3d3425;
-  --color-border-focus: #d4a24e;
-  --color-primary: #d4a24e;
-  --color-primary-light: #e8b95a;
-  --color-primary-dark: #b8862f;
-  --color-success: #7cb342;
-  --color-warning: #f9a825;
-  --color-error: #e53935;
-  --color-muted: #8a7a62;
-  --color-honey: #f0c040;
-  --color-honey-glow: rgba(240, 192, 64, 0.15);
+  /* ── BRIGHT HONEY PALETTE — warm, saturated, golden ── */
+  --color-background: #1c1608;
+  --color-foreground: #fff8e8;
+  --color-surface: #2b2210;
+  --color-surface-2: #3a2e18;
+  --color-border: #5a4828;
+  --color-border-focus: #ffcc00;
+  --color-primary: #ffb800;
+  --color-primary-light: #ffd642;
+  --color-primary-dark: #cc9200;
+  --color-success: #a0d911;
+  --color-warning: #ffab00;
+  --color-error: #ff5252;
+  --color-muted: #b89d6a;
+  --color-honey: #ffe066;
+  --color-honey-glow: rgba(255, 224, 102, 0.22);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -26,106 +27,267 @@ body {
   font-family: var(--font-sans), system-ui, sans-serif;
 }
 
-/* ── Smooth scrollbar ── */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #3d3425;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #4d4435;
-}
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #5a4828; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #7a6838; }
 
-/* ── Honey glow animation ── */
+/* ═══════════════════════════════════════════════════════
+   HONEY GLOW / PULSE / BUZZ ANIMATIONS
+   ═══════════════════════════════════════════════════════ */
+
 @keyframes honey-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 162, 78, 0.4); }
-  50% { box-shadow: 0 0 0 8px rgba(212, 162, 78, 0); }
+  0%, 100% { box-shadow: 0 0 8px 2px rgba(255, 224, 102, 0.4), 0 0 0 0 rgba(255, 224, 102, 0.2); }
+  50% { box-shadow: 0 0 20px 8px rgba(255, 224, 102, 0.2), 0 0 30px 12px rgba(255, 184, 0, 0.08); }
 }
-
 .animate-honey-glow {
-  animation: honey-glow 2s ease-in-out infinite;
+  animation: honey-glow 1.8s ease-in-out infinite;
 }
 
 @keyframes honey-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-
 .animate-honey-pulse {
   animation: honey-pulse 1.5s ease-in-out infinite;
 }
 
-/* ── Hex hive spotlight system ── */
-
-/* Ambient idle pulse — barely perceptible, keeps UI alive */
-@keyframes hive-breathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.002); }
+@keyframes border-warm {
+  0%, 100% { border-color: rgba(255, 184, 0, 0.3); }
+  50% { border-color: rgba(255, 224, 102, 0.7); }
+}
+.animate-border-warm {
+  animation: border-warm 1.5s ease-in-out infinite;
 }
 
+/* Active hex buzz — visible vibration for working bees */
+@keyframes waggle-buzz {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  10% { transform: translate(-1px, 0.5px) rotate(-0.6deg); }
+  20% { transform: translate(1px, -0.5px) rotate(0.6deg); }
+  30% { transform: translate(-0.5px, 1px) rotate(-0.4deg); }
+  40% { transform: translate(0.5px, -1px) rotate(0.4deg); }
+  50% { transform: translate(0, 0) rotate(0deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+.animate-waggle {
+  animation: waggle-buzz 2s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════
+   SPOTLIGHT — much brighter warm center, lighter edges
+   ═══════════════════════════════════════════════════════ */
+
+@keyframes hive-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.004); }
+}
 .hive-ambient {
   animation: hive-breathe 5s ease-in-out infinite;
 }
 
-/*
- * Global spotlight — a single warm radial gradient centered on the viewport.
- * This replaces per-hex box-shadows (which create ugly rectangles on clipped hexes).
- * The spotlight is fixed to the viewport, so the center hex is always lit.
- */
 .hive-spotlight {
   pointer-events: none;
   background:
-    /* Warm honey bloom at center */
+    /* Bright golden center */
     radial-gradient(
-      ellipse 40% 40% at 50% 50%,
-      rgba(240, 192, 64, 0.06) 0%,
-      rgba(212, 162, 78, 0.03) 40%,
-      transparent 70%
+      circle at 50% 50%,
+      rgba(255, 224, 102, 0.28) 0%,
+      rgba(255, 200, 60, 0.18) 15%,
+      rgba(255, 184, 0, 0.08) 32%,
+      transparent 52%
     ),
-    /* Dark vignette at edges */
+    /* Warm amber halo */
+    radial-gradient(
+      ellipse 60% 60% at 50% 50%,
+      rgba(255, 224, 102, 0.12) 0%,
+      rgba(255, 184, 0, 0.06) 35%,
+      transparent 65%
+    ),
+    /* Gentle vignette — much lighter than before */
     radial-gradient(
       ellipse 65% 65% at 50% 50%,
       transparent 0%,
-      rgba(20, 16, 10, 0.10) 40%,
-      rgba(20, 16, 10, 0.45) 65%,
-      rgba(14, 11, 7, 0.82) 100%
+      rgba(28, 22, 8, 0.05) 40%,
+      rgba(28, 22, 8, 0.22) 55%,
+      rgba(22, 16, 6, 0.48) 72%,
+      rgba(18, 12, 4, 0.70) 90%,
+      rgba(16, 10, 4, 0.82) 100%
     );
 }
 
-/* Camera container — NO CSS transition; rAF handles smooth interpolation */
-.hive-camera {
-  will-change: transform;
+@keyframes spotlight-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.95; }
+}
+.hive-spotlight {
+  animation: spotlight-pulse 3.5s ease-in-out infinite;
 }
 
-/* Hex cell transitions — smooth role changes as camera glides */
-.hex-transition {
-  transition:
-    opacity 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
-    transform 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
-    filter 350ms ease;
+/* ═══════════════════════════════════════════════════════
+   FLOATING HONEY PARTICLES — bigger, more visible
+   ═══════════════════════════════════════════════════════ */
+
+@keyframes float-up-1 {
+  0% { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+  8% { opacity: 0.8; }
+  70% { opacity: 0.4; }
+  100% { transform: translateY(-180px) translateX(30px) scale(0.3); opacity: 0; }
+}
+@keyframes float-up-2 {
+  0% { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+  12% { opacity: 0.7; }
+  65% { opacity: 0.3; }
+  100% { transform: translateY(-220px) translateX(-40px) scale(0.2); opacity: 0; }
+}
+@keyframes float-up-3 {
+  0% { transform: translateY(0) translateX(0) scale(0.8); opacity: 0; }
+  10% { opacity: 0.9; }
+  75% { opacity: 0.35; }
+  100% { transform: translateY(-160px) translateX(20px) scale(0.3); opacity: 0; }
+}
+@keyframes float-drift {
+  0% { transform: translateY(0) translateX(0) scale(0.6); opacity: 0; }
+  15% { opacity: 0.6; }
+  60% { opacity: 0.25; }
+  100% { transform: translateY(-200px) translateX(-25px) scale(0.15); opacity: 0; }
 }
 
-/* ── Hexagonal card (pointy-top) ── */
+.honey-particle {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(255, 224, 102, 0.9), rgba(255, 184, 0, 0.4));
+  box-shadow: 0 0 6px 2px rgba(255, 224, 102, 0.3);
+}
+.honey-particle:nth-child(4n)   { width: 6px; height: 6px; animation: float-up-1 3.5s ease-in-out infinite; }
+.honey-particle:nth-child(4n+1) { width: 4px; height: 4px; animation: float-up-2 4.5s ease-in-out infinite; }
+.honey-particle:nth-child(4n+2) { width: 7px; height: 7px; animation: float-up-3 5s ease-in-out infinite; }
+.honey-particle:nth-child(4n+3) { width: 5px; height: 5px; animation: float-drift 6s ease-in-out infinite; }
+
+/* ═══════════════════════════════════════════════════════
+   HONEYCOMB BACKGROUND PATTERN — more visible
+   ═══════════════════════════════════════════════════════ */
+
+.honeycomb-bg {
+  background-image:
+    linear-gradient(30deg, rgba(255, 184, 0, 0.06) 12%, transparent 12.5%, transparent 87%, rgba(255, 184, 0, 0.06) 87.5%, rgba(255, 184, 0, 0.06)),
+    linear-gradient(150deg, rgba(255, 184, 0, 0.06) 12%, transparent 12.5%, transparent 87%, rgba(255, 184, 0, 0.06) 87.5%, rgba(255, 184, 0, 0.06)),
+    linear-gradient(30deg, rgba(255, 184, 0, 0.06) 12%, transparent 12.5%, transparent 87%, rgba(255, 184, 0, 0.06) 87.5%, rgba(255, 184, 0, 0.06)),
+    linear-gradient(150deg, rgba(255, 184, 0, 0.06) 12%, transparent 12.5%, transparent 87%, rgba(255, 184, 0, 0.06) 87.5%, rgba(255, 184, 0, 0.06)),
+    linear-gradient(60deg, rgba(255, 200, 50, 0.07) 25%, transparent 25.5%, transparent 75%, rgba(255, 200, 50, 0.07) 75%, rgba(255, 200, 50, 0.07)),
+    linear-gradient(60deg, rgba(255, 200, 50, 0.07) 25%, transparent 25.5%, transparent 75%, rgba(255, 200, 50, 0.07) 75%, rgba(255, 200, 50, 0.07));
+  background-size: 40px 70px;
+  background-position: 0 0, 0 0, 20px 35px, 20px 35px, 0 0, 20px 35px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   HEX SHAPES
+   ═══════════════════════════════════════════════════════ */
+
+.hive-grid { will-change: transform; }
+
 .hex-card {
-  clip-path: polygon(
-    5% 0%, 95% 0%, 100% 50%, 95% 100%, 5% 100%, 0% 50%
-  );
+  clip-path: polygon(5% 0%, 95% 0%, 100% 50%, 95% 100%, 5% 100%, 0% 50%);
 }
-
-/* ── Flat-top regular hex for honeycomb cells ── */
-/* Vertices: top-left, top-right, right, bottom-right, bottom-left, left */
-/* Requires box aspect ratio w:h = 2:√3 (set via size*2 x size*√3) */
 .hex-cell {
   clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
 }
+.hex-badge {
+  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
-/* Softer hex — just the corners */
+/* ═══════════════════════════════════════════════════════
+   GOLDEN TEXT — animated shimmer
+   ═══════════════════════════════════════════════════════ */
+
+.text-golden {
+  background: linear-gradient(135deg, #ffb800, #ffe066, #ffd642, #ffcc00, #ffe066);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: golden-shimmer 2.5s ease-in-out infinite;
+}
+
+@keyframes golden-shimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ═══════════════════════════════════════════════════════
+   BEE FLY-IN — bright arrival glow burst
+   ═══════════════════════════════════════════════════════ */
+
+@keyframes bee-arrive-burst {
+  0% { filter: brightness(3) drop-shadow(0 0 30px rgba(255, 224, 102, 1)); }
+  30% { filter: brightness(1.8) drop-shadow(0 0 16px rgba(255, 224, 102, 0.6)); }
+  70% { filter: brightness(1.2) drop-shadow(0 0 6px rgba(255, 224, 102, 0.3)); }
+  100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+}
+.bee-fly-in {
+  animation: bee-arrive-burst 0.8s ease-out;
+}
+
+/* ═══════════════════════════════════════════════════════
+   BEE FLY-AWAY — dramatic bright trail
+   ═══════════════════════════════════════════════════════ */
+
+@keyframes bee-depart-glow {
+  0% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+  15% { filter: brightness(2) drop-shadow(0 0 20px rgba(255, 224, 102, 0.9)); }
+  40% { filter: brightness(2.5) drop-shadow(0 0 35px rgba(255, 184, 0, 0.8)); }
+  100% { filter: brightness(0.5) drop-shadow(0 0 10px rgba(255, 184, 0, 0.3)); }
+}
+.bee-fly-away {
+  animation: bee-depart-glow 1.2s ease-out forwards;
+}
+
+/* Trail line behind flying bee */
+@keyframes trail-fade {
+  0% { opacity: 0.9; transform: scaleX(1); }
+  100% { opacity: 0; transform: scaleX(0.3); }
+}
+
+/* ═══════════════════════════════════════════════════════
+   WARM SURFACE GLOW
+   ═══════════════════════════════════════════════════════ */
+
+.hover-glow {
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.hover-glow:hover {
+  box-shadow: 0 0 30px rgba(255, 184, 0, 0.15), 0 0 12px rgba(255, 224, 102, 0.1);
+  border-color: rgba(255, 184, 0, 0.5);
+}
+
+.warm-glow {
+  box-shadow: 0 0 20px rgba(255, 224, 102, 0.12), inset 0 0 16px rgba(255, 224, 102, 0.04);
+}
+
+/* Extra bright glow for hex cells that are actively working */
+.hex-active-glow {
+  box-shadow: 0 0 24px 4px rgba(255, 224, 102, 0.3), 0 0 8px 2px rgba(255, 184, 0, 0.2);
+}
+
+/* Pulsing ring around active cells */
+@keyframes hex-ring-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 224, 102, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 224, 102, 0); }
+}
+.hex-ring-pulse {
+  animation: hex-ring-pulse 2s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════
+   MISC / LEGACY
+   ═══════════════════════════════════════════════════════ */
+
 .hex-rounded {
   border-radius: 12px;
   position: relative;
@@ -136,13 +298,12 @@ body {
   inset: -1px;
   border-radius: 12px;
   padding: 1px;
-  background: linear-gradient(135deg, rgba(212, 162, 78, 0.3), rgba(212, 162, 78, 0.05), rgba(212, 162, 78, 0.3));
+  background: linear-gradient(135deg, rgba(255, 184, 0, 0.4), rgba(255, 224, 102, 0.1), rgba(255, 184, 0, 0.4));
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
   pointer-events: none;
 }
 
-/* ── Honeycomb layout ── */
 .honeycomb-wrap {
   display: flex;
   flex-wrap: wrap;
@@ -150,52 +311,17 @@ body {
   padding: 10px 0;
   overflow: visible;
 }
-
-/*
-  Each hex cell is a flat-top hexagon:
-  - Width  = size
-  - Height = size * 1.1547  (2 / sqrt(3))
-  Offset rows shift right by half a cell width.
-*/
 .honeycomb-wrap .hex-outer {
-  /* default sizing, overridden by JS inline styles */
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* ── Golden gradient text ── */
-.text-golden {
-  background: linear-gradient(135deg, #d4a24e, #f0c040, #e8b95a);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* ── Hex badge ── */
-.hex-badge {
-  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* ── Warm surface glow on hover ── */
-.hover-glow {
-  transition: box-shadow 0.3s ease, border-color 0.3s ease;
-}
-.hover-glow:hover {
-  box-shadow: 0 0 20px rgba(212, 162, 78, 0.08);
-  border-color: rgba(212, 162, 78, 0.3);
-}
-
-/* Legacy compat */
 .animate-pulse-glow {
   animation: honey-glow 2s ease-in-out infinite;
 }
 
-/* ── Honeycomb grid (legacy) ── */
 .honeycomb-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

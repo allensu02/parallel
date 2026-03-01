@@ -78,50 +78,61 @@ export default function Header({ onAuthChange }: HeaderProps) {
       initial={{ y: -20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.4, ease: "easeOut" }}
-      className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface"
+      className="flex items-center justify-between px-6 py-4 border-b-2 border-honey/25 bg-gradient-to-r from-surface via-surface-2/90 to-surface backdrop-blur-md relative overflow-hidden"
     >
-      <div className="flex items-center gap-3">
-        {/* Hex logo */}
-        <div className="w-9 h-9 hex-badge bg-gradient-to-br from-primary to-honey">
-          <Hexagon className="w-4 h-4 text-background" strokeWidth={2.5} />
-        </div>
+      {/* Honeycomb bg in header */}
+      <div className="absolute inset-0 honeycomb-bg opacity-60 pointer-events-none" />
+      {/* Warm glow in top-left */}
+      <div className="absolute top-0 left-0 w-64 h-32 bg-gradient-radial from-honey/10 to-transparent pointer-events-none" style={{ background: "radial-gradient(ellipse at top left, rgba(255,224,102,0.12) 0%, transparent 70%)" }} />
+
+      <div className="flex items-center gap-3 relative z-10">
+        {/* Hex logo — animated glow + bounce */}
+        <motion.div
+          animate={{ rotate: [0, 5, -5, 0], scale: [1, 1.04, 1] }}
+          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          className="w-11 h-11 hex-badge bg-gradient-to-br from-honey via-primary to-primary-dark shadow-xl shadow-honey/30"
+        >
+          <Hexagon className="w-6 h-6 text-background" strokeWidth={2.5} />
+        </motion.div>
         <div>
-          <h1 className="text-lg font-bold tracking-tight text-golden">Hive</h1>
+          <h1 className="text-2xl font-extrabold tracking-tight text-golden">Hive</h1>
         </div>
-        <span className="text-[10px] text-muted font-mono px-2 py-0.5 rounded-full bg-surface-2 border border-border">
-          email swarm
+        <span className="text-[10px] text-honey font-bold font-mono px-3 py-1 rounded-full bg-honey/10 border border-honey/25 animate-border-warm">
+          swarm intelligence
         </span>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 relative z-10">
         {auth?.authenticated ? (
           <>
-            <div className="flex items-center gap-2 text-sm text-muted">
-              <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-              <Mail className="w-3.5 h-3.5 text-primary" />
-              <span className="text-foreground/70">{auth.email || "Connected"}</span>
+            <div className="flex items-center gap-2 text-sm">
+              <div className="w-2.5 h-2.5 rounded-full bg-success animate-pulse shadow-md shadow-success/30" />
+              <Mail className="w-4 h-4 text-honey" />
+              <span className="text-foreground/90 font-medium">{auth.email || "Connected"}</span>
             </div>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-border hover:border-primary/30 hover-glow transition-all text-muted hover:text-foreground"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-honey/20 hover:border-honey/40 hover-glow transition-all text-muted hover:text-foreground"
             >
               <LogOut className="w-3 h-3" />
               Sign out
             </button>
           </>
         ) : loginPending ? (
-          <div className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-surface-2 border border-border text-muted">
-            <Loader2 className="w-4 h-4 animate-spin text-primary" />
-            <span>Waiting for Gmail login...</span>
+          <div className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-honey/10 border border-honey/25 text-honey animate-border-warm">
+            <Loader2 className="w-4 h-4 animate-spin text-honey" />
+            <span className="font-semibold">Waiting for login...</span>
           </div>
         ) : (
-          <button
+          <motion.button
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
             onClick={handleLogin}
-            className="flex items-center gap-2 px-5 py-2 text-sm rounded-lg bg-gradient-to-r from-primary to-primary-light hover:from-primary-light hover:to-honey transition-all text-background font-semibold shadow-lg shadow-primary/20"
+            className="flex items-center gap-2 px-6 py-2.5 text-sm rounded-xl bg-gradient-to-r from-primary via-honey to-primary-light hover:from-honey hover:to-honey transition-all text-background font-extrabold shadow-xl shadow-honey/35 hover:shadow-honey/50"
           >
             <Mail className="w-4 h-4" />
             Connect Gmail
-          </button>
+          </motion.button>
         )}
       </div>
     </motion.header>

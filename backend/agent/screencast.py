@@ -12,7 +12,7 @@ from typing import Any
 
 from playwright.async_api import Page, CDPSession
 
-from backend.routes.events import publish_event
+from backend.routes.events import publish_event, publish_global
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -89,12 +89,14 @@ class ScreencastSession:
             )
 
     async def _publish_frame(self, frame_data: str) -> None:
-        """Send frame to frontend via SSE."""
+        """Send frame to frontend via SSE (both run-specific and global)."""
+        payload = {
+            "job_id": self.job_id,
+            "frame": frame_data,
+        }
         try:
-            await publish_event(self.run_id, "job.frame", {
-                "job_id": self.job_id,
-                "frame": frame_data,
-            })
+            await publish_event(self.run_id, "job.frame", payload)
+            await publish_global("job.frame", {**payload, "run_id": self.run_id})
         except Exception:
             pass  # Non-fatal
 

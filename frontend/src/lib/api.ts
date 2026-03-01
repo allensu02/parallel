@@ -30,6 +30,8 @@ export interface Run {
   skipped_jobs: number;
 }
 
+export type PipelineType = "gmail" | "slides" | "sheets" | "docs" | "forms" | "drive" | "slack" | "generic";
+
 export interface Job {
   id: string;
   run_id: string;
@@ -46,6 +48,23 @@ export interface Job {
   summary: string | null;
   tokens_used: number;
   duration_ms: number;
+  // Pipeline fields
+  pipeline_type: PipelineType;
+  task_instruction: string;
+  live_view_url: string;
+}
+
+export interface TaskInput {
+  description: string;
+  pipeline_type?: string;
+  url?: string;
+  params?: Record<string, unknown>;
+}
+
+export interface PipelineInfo {
+  type: string;
+  name: string;
+  description: string;
 }
 
 export interface Step {
@@ -143,15 +162,28 @@ export async function batchFetchThreads(
 
 export async function createRun(
   threadIds: string[],
-  threadSubjects: Record<string, string> = {}
+  threadSubjects: Record<string, string> = {},
+  tasks: TaskInput[] = [],
 ): Promise<Run> {
   return fetchAPI<Run>("/api/runs", {
     method: "POST",
     body: JSON.stringify({
       thread_ids: threadIds,
       thread_subjects: threadSubjects,
+      tasks,
     }),
   });
+}
+
+export async function createTaskRun(tasks: TaskInput[]): Promise<Run> {
+  return fetchAPI<Run>("/api/runs", {
+    method: "POST",
+    body: JSON.stringify({ tasks }),
+  });
+}
+
+export async function listPipelines(): Promise<PipelineInfo[]> {
+  return fetchAPI<PipelineInfo[]>("/api/pipelines");
 }
 
 export async function listRuns(): Promise<Run[]> {

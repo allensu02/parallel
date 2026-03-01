@@ -103,6 +103,39 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id);
 CREATE INDEX IF NOT EXISTS idx_steps_job ON steps(job_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_idemp ON jobs(idempotency_key);
+
+CREATE TABLE IF NOT EXISTS swarms (
+    id               TEXT PRIMARY KEY,
+    status           TEXT NOT NULL DEFAULT 'queued',
+    created_at       TEXT NOT NULL,
+    finished_at      TEXT,
+    total_agents     INTEGER NOT NULL DEFAULT 0,
+    completed_agents INTEGER NOT NULL DEFAULT 0,
+    failed_agents    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS swarm_agents (
+    id               TEXT PRIMARY KEY,
+    swarm_id         TEXT NOT NULL REFERENCES swarms(id),
+    task_url         TEXT NOT NULL DEFAULT '',
+    task_instruction TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'queued',
+    current_action   TEXT NOT NULL DEFAULT '',
+    session_id       TEXT NOT NULL DEFAULT '',
+    live_view_url    TEXT NOT NULL DEFAULT '',
+    result           TEXT,
+    error_msg        TEXT,
+    actions_taken    INTEGER NOT NULL DEFAULT 0,
+    started_at       TEXT,
+    finished_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_agents_swarm ON swarm_agents(swarm_id);
+
+CREATE TABLE IF NOT EXISTS kv_store (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 # ---------------------------------------------------------------------------
@@ -122,11 +155,7 @@ async def get_db() -> aiosqlite.Connection:
         await _db.execute("PRAGMA foreign_keys=ON")
         await _db.commit()
         # Run migrations for new columns
-        try:
-            await _db.execute("ALTER TABLE jobs ADD COLUMN draft_text TEXT DEFAULT ''")
-            await _db.commit()
-        except Exception:
-            pass
+        await _ensure_columns()
     return _db
 
 
@@ -424,8 +453,125 @@ async def append_edit_diff(profile_id: str, diff: dict) -> None:
 async def _ensure_columns():
     """Add new columns to existing tables if they don't exist."""
     d = await get_db()
-    try:
-        await d.execute("ALTER TABLE jobs ADD COLUMN draft_text TEXT DEFAULT ''")
-        await d.commit()
-    except Exception:
-        pass  # Column already exists
+    _migrations = [
+        "ALTER TABLE jobs ADD COLUMN draft_text TEXT DEFAULT ''",
+        "ALTER TABLE jobs ADD COLUMN pipeline_type TEXT DEFAULT 'gmail'",
+        "ALTER TABLE jobs ADD COLUMN task_instruction TEXT DEFAULT ''",
+        "ALTER TABLE jobs ADD COLUMN live_view_url TEXT DEFAULT ''",
+    ]
+    for sql in _migrations:
+        try:
+            await d.execute(sql)
+            await d.commit()
+        except Exception:
+            pass  # Column already exists
+
+
+# ---------------------------------------------------------------------------
+# Swarm CRUD
+# ---------------------------------------------------------------------------
+
+async def create_swarm() -> dict:
+    d = await get_db()
+    swarm_id = _uuid()
+    now = _now()
+    await d.execute(
+        "INSERT INTO swarms (id, status, created_at) VALUES (?, ?, ?)",
+        (swarm_id, "queued", now),
+    )
+    await d.commit()
+    return {"id": swarm_id, "status": "queued", "created_at": now,
+            "total_agents": 0, "completed_agents": 0, "failed_agents": 0}
+
+
+async def get_swarm(swarm_id: str) -> dict | None:
+    d = await get_db()
+    cur = await d.execute("SELECT * FROM swarms WHERE id = ?", (swarm_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_swarms() -> list[dict]:
+    d = await get_db()
+    cur = await d.execute("SELECT * FROM swarms ORDER BY created_at DESC")
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def update_swarm(swarm_id: str, **fields) -> None:
+    d = await get_db()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [swarm_id]
+    await d.execute(f"UPDATE swarms SET {sets} WHERE id = ?", vals)
+    await d.commit()
+
+
+async def increment_swarm_counter(swarm_id: str, column: str, amount: int = 1) -> None:
+    d = await get_db()
+    await d.execute(
+        f"UPDATE swarms SET {column} = {column} + ? WHERE id = ?",
+        (amount, swarm_id),
+    )
+    await d.commit()
+
+
+# ---------------------------------------------------------------------------
+# Swarm Agent CRUD
+# ---------------------------------------------------------------------------
+
+async def create_swarm_agent(swarm_id: str, task_url: str, task_instruction: str) -> dict:
+    d = await get_db()
+    agent_id = _uuid()
+    await d.execute(
+        """INSERT INTO swarm_agents (id, swarm_id, task_url, task_instruction)
+           VALUES (?, ?, ?, ?)""",
+        (agent_id, swarm_id, task_url, task_instruction),
+    )
+    await d.commit()
+    return {
+        "id": agent_id, "swarm_id": swarm_id,
+        "task_url": task_url, "task_instruction": task_instruction,
+        "status": "queued",
+    }
+
+
+async def get_swarm_agent(agent_id: str) -> dict | None:
+    d = await get_db()
+    cur = await d.execute("SELECT * FROM swarm_agents WHERE id = ?", (agent_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_swarm_agents(swarm_id: str) -> list[dict]:
+    d = await get_db()
+    cur = await d.execute(
+        "SELECT * FROM swarm_agents WHERE swarm_id = ? ORDER BY rowid", (swarm_id,)
+    )
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def update_swarm_agent(agent_id: str, **fields) -> None:
+    d = await get_db()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [agent_id]
+    await d.execute(f"UPDATE swarm_agents SET {sets} WHERE id = ?", vals)
+    await d.commit()
+
+
+# ---------------------------------------------------------------------------
+# Key-Value Store (for Browserbase context ID, etc.)
+# ---------------------------------------------------------------------------
+
+async def kv_get(key: str) -> str | None:
+    d = await get_db()
+    cur = await d.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
+    row = await cur.fetchone()
+    return row["value"] if row else None
+
+
+async def kv_set(key: str, value: str) -> None:
+    d = await get_db()
+    await d.execute(
+        "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+    await d.commit()

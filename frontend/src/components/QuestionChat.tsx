@@ -97,12 +97,12 @@ function QuestionCard({
       transition={{ duration: 0.2 }}
       className={`rounded-xl border overflow-hidden transition-all ${
         isAnswered
-          ? "border-success/20 bg-surface"
-          : "border-warning/25 bg-surface"
+          ? "border-success/20 bg-surface/80"
+          : "border-honey/25 bg-surface/80 warm-glow"
       }`}
     >
       {/* Question header — subject + status */}
-      <div className="flex items-center justify-between px-3 py-2 bg-surface-2 border-b border-border/50">
+      <div className="flex items-center justify-between px-3 py-2 bg-surface-2/60 border-b border-primary/10">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <div className={`w-5 h-5 hex-badge flex-shrink-0 flex items-center justify-center ${
             isAnswered ? "bg-success/15" : "bg-honey-glow"
@@ -204,7 +204,7 @@ function QuestionCard({
           <div className="text-xs text-success">{answer.text === "(answered)" ? "Answered" : answer.text}</div>
         </div>
       ) : (
-        <div className="px-3 py-2 border-t border-border/50 flex items-center gap-2">
+        <div className="px-3 py-2 border-t border-primary/10 flex items-center gap-2">
           <input
             type="text"
             value={input}
@@ -212,12 +212,12 @@ function QuestionCard({
             onKeyDown={handleKeyDown}
             placeholder="Type your answer..."
             disabled={sending}
-            className="flex-1 px-2.5 py-1.5 text-xs rounded-lg bg-surface-2 border border-border focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none text-foreground disabled:opacity-50 transition-all"
+            className="flex-1 px-2.5 py-1.5 text-xs rounded-lg bg-surface-2/60 border border-primary/15 focus:border-honey/50 focus:ring-2 focus:ring-honey/15 outline-none text-foreground disabled:opacity-50 transition-all"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending}
-            className="p-1.5 rounded-lg bg-gradient-to-r from-primary to-primary-light hover:from-primary-light hover:to-honey disabled:opacity-40 disabled:cursor-not-allowed transition-all text-background"
+            className="p-1.5 rounded-lg bg-gradient-to-r from-primary via-honey to-primary-light hover:shadow-md hover:shadow-honey/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-background"
           >
             <Send className="w-3 h-3" />
           </button>
@@ -232,24 +232,26 @@ function QuestionCard({
 
 export default function QuestionChat({ messages, runId, jobs, onAnswered }: QuestionChatProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [showAnswered, setShowAnswered] = useState(false);
 
-  // Auto-expand when new question arrives
-  useEffect(() => {
-    const pendingQ = messages.filter(
-      (m) => m.type === "question" && !messages.some((a) => a.type === "answer" && a.jobId === m.jobId)
-    );
-    if (pendingQ.length > 0) {
-      setCollapsed(false);
-    }
-  }, [messages]);
-
-  // Group questions by jobId
   const questions = messages.filter((m) => m.type === "question");
   const answers = messages.filter((m) => m.type === "answer");
 
-  const pendingCount = questions.filter(
+  const pendingQuestions = questions.filter(
     (q) => !answers.some((a) => a.jobId === q.jobId)
-  ).length;
+  );
+  const answeredQuestions = questions.filter(
+    (q) => answers.some((a) => a.jobId === q.jobId)
+  );
+  const pendingCount = pendingQuestions.length;
+  const answeredCount = answeredQuestions.length;
+
+  // Auto-expand when new question arrives
+  useEffect(() => {
+    if (pendingCount > 0) {
+      setCollapsed(false);
+    }
+  }, [pendingCount]);
 
   if (messages.length === 0) return null;
 
@@ -260,30 +262,34 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
       className="fixed bottom-0 left-0 right-0 z-40"
     >
       <div className="max-w-7xl mx-auto px-6">
-        <div className="rounded-t-xl border border-b-0 border-border bg-surface shadow-2xl shadow-black/30 overflow-hidden">
+        <div className="rounded-t-xl border border-b-0 border-primary/20 bg-surface/95 backdrop-blur-md shadow-2xl shadow-black/40 overflow-hidden">
           {/* Toggle header */}
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="w-full flex items-center justify-between px-4 py-2.5 bg-surface-2 hover:bg-border/30 transition-all"
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-surface-2/80 hover:bg-primary/5 transition-all border-b border-primary/10"
           >
             <div className="flex items-center gap-2">
-              <Hexagon className="w-4 h-4 text-primary" />
-              <span className="text-sm font-semibold text-foreground">Hive Needs Input</span>
+              <div className="relative">
+                <div className="w-5 h-5 hex-badge bg-honey-glow flex items-center justify-center">
+                  <Hexagon className="w-3 h-3 text-honey" />
+                </div>
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-surface-2 animate-pulse" />
+                )}
+              </div>
+              <span className="text-sm font-bold text-golden">
+                {pendingCount > 0 ? "Hive Needs Input" : "Hive Questions"}
+              </span>
               {pendingCount > 0 && (
-                <span className="text-[10px] font-bold bg-honey-glow text-honey px-2 py-0.5 rounded-full border border-honey/30">
+                <span className="text-[10px] font-bold bg-red-500/15 text-red-400 px-2 py-0.5 rounded-full border border-red-500/30 animate-pulse">
                   {pendingCount} pending
-                </span>
-              )}
-              {questions.length > pendingCount && (
-                <span className="text-[10px] text-success px-1.5 py-0.5 rounded-full bg-success/10 border border-success/20">
-                  {questions.length - pendingCount} answered
                 </span>
               )}
             </div>
             {collapsed ? (
-              <ChevronUp className="w-4 h-4 text-muted" />
+              <ChevronUp className="w-4 h-4 text-primary/50" />
             ) : (
-              <ChevronDown className="w-4 h-4 text-muted" />
+              <ChevronDown className="w-4 h-4 text-primary/50" />
             )}
           </button>
 
@@ -298,28 +304,75 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
                 className="overflow-hidden"
               >
                 <div className="max-h-[350px] overflow-y-auto px-3 py-3 space-y-2">
-                  {/* Pending questions first, then answered */}
-                  {[...questions]
-                    .sort((a, b) => {
-                      const aAnswered = answers.some((ans) => ans.jobId === a.jobId);
-                      const bAnswered = answers.some((ans) => ans.jobId === b.jobId);
-                      if (aAnswered !== bAnswered) return aAnswered ? 1 : -1;
-                      return 0;
-                    })
-                    .map((q) => {
-                      const ans = answers.find((a) => a.jobId === q.jobId) ?? null;
-                      const job = jobs?.find((j) => j.id === q.jobId);
-                      return (
-                        <QuestionCard
-                          key={q.id}
-                          question={q}
-                          answer={ans}
-                          job={job}
-                          runId={runId}
-                          onAnswered={onAnswered}
-                        />
-                      );
-                    })}
+                  {/* Pending (unanswered) questions — always visible */}
+                  {pendingQuestions.map((q) => {
+                    const job = jobs?.find((j) => j.id === q.jobId);
+                    return (
+                      <QuestionCard
+                        key={q.id}
+                        question={q}
+                        answer={null}
+                        job={job}
+                        runId={runId}
+                        onAnswered={onAnswered}
+                      />
+                    );
+                  })}
+
+                  {/* Empty state when no pending questions */}
+                  {pendingCount === 0 && (
+                    <div className="text-center py-3 text-xs text-muted">
+                      <Check className="w-4 h-4 mx-auto mb-1 text-success" />
+                      All questions answered
+                    </div>
+                  )}
+
+                  {/* Answered questions — collapsible dropdown */}
+                  {answeredCount > 0 && (
+                    <div className="border-t border-border/30 pt-2 mt-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setShowAnswered(!showAnswered); }}
+                        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[10px] text-muted hover:text-foreground transition-colors rounded-lg hover:bg-surface-2"
+                      >
+                        {showAnswered ? (
+                          <ChevronDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronRight className="w-3 h-3" />
+                        )}
+                        <Check className="w-3 h-3 text-success" />
+                        <span>{answeredCount} answered question{answeredCount !== 1 ? "s" : ""}</span>
+                      </button>
+
+                      <AnimatePresence>
+                        {showAnswered && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.15 }}
+                            className="overflow-hidden"
+                          >
+                            <div className="space-y-2 pt-1.5">
+                              {answeredQuestions.map((q) => {
+                                const ans = answers.find((a) => a.jobId === q.jobId) ?? null;
+                                const job = jobs?.find((j) => j.id === q.jobId);
+                                return (
+                                  <QuestionCard
+                                    key={q.id}
+                                    question={q}
+                                    answer={ans}
+                                    job={job}
+                                    runId={runId}
+                                    onAnswered={onAnswered}
+                                  />
+                                );
+                              })}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}

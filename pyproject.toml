@@ -7,6 +7,8 @@ requires-python = ">=3.14"
 dependencies = [
     "aiosqlite>=0.22.1",
     "anthropic>=0.79.0",
+    "browserbase",
+    "duckduckgo-search",
     "fastapi>=0.129.0",
     "google-api-python-client>=2.190.0",
     "google-auth-oauthlib>=1.2.4",
@@ -17,5 +19,6 @@ dependencies = [
     "pyqt6-webengine",
     "python-dotenv>=1.2.1",
     "sse-starlette>=3.2.0",
+    "stagehand",
     "uvicorn[standard]>=0.40.0",
 ]

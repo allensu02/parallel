@@ -71,7 +71,7 @@ async def event_stream(run_id: str):
 
 @router.get("/global/stream")
 async def global_event_stream():
-    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=2000)
     subs = _get_subs("__global__")
     subs.append(queue)
 
