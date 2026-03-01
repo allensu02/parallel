@@ -19,6 +19,7 @@ import {
   setupSwarmAuth,
   saveSwarmAuth,
   cancelSwarmAuth,
+  clearSwarmAuth,
   loginSwarmAuth,
 } from "@/lib/api";
 
@@ -31,6 +32,9 @@ export default function SwarmLoginPage() {
   const [password, setPassword] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginResult, setLoginResult] = useState<{ status: string; message: string; error?: string } | null>(null);
+
+  // Clear saved login (expired session)
+  const [clearing, setClearing] = useState(false);
 
   // Manual flow (fallback)
   const [manualLoading, setManualLoading] = useState(false);
@@ -101,6 +105,20 @@ export default function SwarmLoginPage() {
     }
   };
 
+  const handleClearAuth = async () => {
+    setClearing(true);
+    try {
+      await clearSwarmAuth();
+      setAuthenticated(false);
+      setContextId(null);
+      setLoginResult(null);
+    } catch (e) {
+      console.error("Failed to clear:", e);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       <Header onAuthChange={() => {}} />
@@ -133,9 +151,19 @@ export default function SwarmLoginPage() {
 
           {/* Status */}
           {authenticated && (
-            <div className="flex items-center justify-center gap-2 text-xs text-success">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Login saved — agents will use your session</span>
+            <div className="flex flex-col items-center gap-2">
+              <div className="flex items-center justify-center gap-2 text-xs text-success">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Login saved — agents will use your session</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleClearAuth}
+                disabled={clearing}
+                className="text-xs text-muted hover:text-error transition-colors disabled:opacity-50"
+              >
+                {clearing ? "Clearing..." : "Clear saved login (e.g. session expired)"}
+              </button>
             </div>
           )}
 

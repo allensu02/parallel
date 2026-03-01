@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from backend import database as db
 from backend.agent.browser_agent import BrowserAgent, AgentTask, AgentResult
-from backend.config import SWARM_MAX_AGENTS
+from backend.config import SWARM_MAX_AGENTS, SWARM_MAX_STEPS, AGENT_BACKEND
 from backend.routes.events import publish_event, publish_global
 
 
@@ -216,13 +216,21 @@ async def start_swarm(swarm_id: str, tasks: list[dict]) -> None:
         effective_tasks = tasks[:SWARM_MAX_AGENTS]
         await db.update_swarm(swarm_id, total_agents=len(effective_tasks))
 
+        # Pick agent backend
+        use_browser_use = AGENT_BACKEND == "browser-use"
+        if use_browser_use:
+            from backend.agent.browser_agent_bu import BrowserUseBrowserAgent
+            print(f"[Swarm] Using backend: browser-use")
+        else:
+            print(f"[Swarm] Using backend: stagehand")
+
         # Create agents and DB records
-        agents: list[BrowserAgent] = []
+        agents: list = []
         for task_dict in effective_tasks:
             task = AgentTask(
                 instruction=task_dict["instruction"],
                 url=task_dict.get("url", ""),
-                max_steps=task_dict.get("max_steps", 20),
+                max_steps=task_dict.get("max_steps", SWARM_MAX_STEPS),
                 timeout=task_dict.get("timeout", 300),
                 extract_schema=task_dict.get("extract_schema"),
             )
@@ -232,11 +240,19 @@ async def start_swarm(swarm_id: str, tasks: list[dict]) -> None:
                 task_url=task.url or "",
                 task_instruction=task.instruction,
             )
-            agent = BrowserAgent(
-                agent_id=agent_record["id"],
-                swarm_id=swarm_id,
-                task=task,
-            )
+
+            if use_browser_use:
+                agent = BrowserUseBrowserAgent(
+                    agent_id=agent_record["id"],
+                    swarm_id=swarm_id,
+                    task=task,
+                )
+            else:
+                agent = BrowserAgent(
+                    agent_id=agent_record["id"],
+                    swarm_id=swarm_id,
+                    task=task,
+                )
             agents.append(agent)
 
         # Track active agents for live queries

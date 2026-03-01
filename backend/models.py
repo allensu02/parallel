@@ -160,7 +160,7 @@ class SwarmTaskIn(BaseModel):
     """A single task for a browser agent."""
     instruction: str
     url: str = ""  # optional — agent will navigate on its own if blank
-    max_steps: int = 20
+    max_steps: int = 50
     timeout: float = 300
     extract_schema: dict[str, Any] | None = None
 

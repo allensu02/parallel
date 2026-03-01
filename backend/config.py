@@ -62,6 +62,13 @@ BROWSERBASE_API_KEY: str = os.getenv("BROWSERBASE_API_KEY", "")
 BROWSERBASE_PROJECT_ID: str = os.getenv("BROWSERBASE_PROJECT_ID", "")
 STAGEHAND_MODEL: str = os.getenv("STAGEHAND_MODEL", "anthropic/claude-sonnet-4-5")
 STAGEHAND_API_URL: str = os.getenv("STAGEHAND_API_URL", "https://api.stagehand.browserbase.com")
+# Agent backend: "stagehand" or "browser-use"
+AGENT_BACKEND: str = os.getenv("AGENT_BACKEND", "stagehand")
+
+# Browser-Use Cloud
+BROWSER_USE_API_KEY: str = os.getenv("BROWSER_USE_API_KEY", "")
+BROWSER_USE_MODEL: str = os.getenv("BROWSER_USE_MODEL", "bu-2-0")
+
 SWARM_MAX_AGENTS: int = int(os.getenv("SWARM_MAX_AGENTS", "20"))
 SWARM_AGENT_TIMEOUT: int = int(os.getenv("SWARM_AGENT_TIMEOUT", "300"))
 SWARM_MAX_STEPS: int = int(os.getenv("SWARM_MAX_STEPS", "30"))

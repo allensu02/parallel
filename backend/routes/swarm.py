@@ -132,20 +132,12 @@ async def auth_setup():
     if not BROWSERBASE_API_KEY or not BROWSERBASE_PROJECT_ID:
         raise HTTPException(status_code=400, detail="Browserbase credentials not configured")
 
-    # Reuse existing context if we have one, otherwise create new
-    existing_context_id = await db.kv_get("browserbase_context_id")
-
-    def _create(reuse_context_id: str | None):
+    # Always create a new context for this setup so we don't reuse an expired one.
+    def _create():
         bb = Browserbase(api_key=BROWSERBASE_API_KEY)
-
-        # Reuse existing context or create new one
-        if reuse_context_id:
-            context_id = reuse_context_id
-            print(f"[Auth] Reusing existing context: {context_id}")
-        else:
-            context = bb.contexts.create(project_id=BROWSERBASE_PROJECT_ID)
-            context_id = context.id
-            print(f"[Auth] Created new context: {context_id}")
+        context = bb.contexts.create(project_id=BROWSERBASE_PROJECT_ID)
+        context_id = context.id
+        print(f"[Auth] Created new context: {context_id}")
 
         # Start a session with context + persist + proxies + stealth
         # Per https://docs.browserbase.com/guides/authentication
@@ -180,7 +172,7 @@ async def auth_setup():
         }
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _create, existing_context_id)
+    result = await loop.run_in_executor(None, _create)
     _auth_session = result
 
     return {
@@ -232,18 +224,15 @@ async def auth_login(body: dict):
     if not BROWSERBASE_API_KEY or not BROWSERBASE_PROJECT_ID:
         raise HTTPException(status_code=400, detail="Browserbase not configured")
 
-    # Reuse existing context or create new
-    existing_context_id = await db.kv_get("browserbase_context_id")
-
-    def _create_context(reuse_id: str | None) -> str:
+    # Always create a new context for this login so we don't reuse an expired one.
+    # (Stored context is only used when starting agent sessions, not here.)
+    def _create_context() -> str:
         bb = Browserbase(api_key=BROWSERBASE_API_KEY)
-        if reuse_id:
-            return reuse_id
         context = bb.contexts.create(project_id=BROWSERBASE_PROJECT_ID)
         return context.id
 
     loop = asyncio.get_event_loop()
-    context_id = await loop.run_in_executor(None, _create_context, existing_context_id)
+    context_id = await loop.run_in_executor(None, _create_context)
 
     # Use Stagehand to log into Gmail
     from backend.config import ANTHROPIC_API_KEY, STAGEHAND_MODEL
@@ -292,6 +281,9 @@ async def auth_login(body: dict):
         # Save context
         await db.kv_set("browserbase_context_id", context_id)
 
+        # Give Browserbase a moment to persist context (cookies/session) before reusing.
+        await asyncio.sleep(3)
+
         return {
             "status": "success",
             "context_id": context_id,
@@ -310,6 +302,19 @@ async def auth_login(body: dict):
             await session.end()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# POST /api/swarm/auth/clear — remove saved context (e.g. after session expired)
+# ---------------------------------------------------------------------------
+
+@router.post("/auth/clear")
+async def auth_clear():
+    await db.kv_delete("browserbase_context_id")
+    return {
+        "status": "cleared",
+        "message": "Saved login context removed. You can log in again to create a new session.",
+    }
 
 
 # ---------------------------------------------------------------------------

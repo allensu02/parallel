@@ -358,6 +358,10 @@ export async function cancelSwarmAuth(): Promise<{ status: string }> {
   return fetchAPI<{ status: string }>("/api/swarm/auth/cancel", { method: "POST" });
 }
 
+export async function clearSwarmAuth(): Promise<{ status: string; message: string }> {
+  return fetchAPI<{ status: string; message: string }>("/api/swarm/auth/clear", { method: "POST" });
+}
+
 export async function loginSwarmAuth(email: string, password: string): Promise<{ status: string; message: string; error?: string }> {
   return fetchAPI<{ status: string; message: string; error?: string }>("/api/swarm/auth/login", {
     method: "POST",

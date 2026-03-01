@@ -572,3 +572,9 @@ async def kv_set(key: str, value: str) -> None:
         (key, value),
     )
     await d.commit()
+
+
+async def kv_delete(key: str) -> None:
+    d = await get_db()
+    await d.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+    await d.commit()

@@ -73,6 +73,7 @@ class BrowserAgent:
         # Runtime state
         self._client: AsyncStagehand | None = None
         self._session: Any = None
+        self._using_saved_context: bool = False
         self.session_id: str | None = None
         self.live_view_url: str | None = None
         self.status: str = "queued"
@@ -119,6 +120,7 @@ class BrowserAgent:
         }
 
         if context_id:
+            self._using_saved_context = True
             print(f"[Agent {self.agent_id}] Using Browserbase context: {context_id}")
             browser_settings["context"] = {
                 "id": context_id,
@@ -190,8 +192,14 @@ class BrowserAgent:
             if not self._session:
                 raise RuntimeError("Agent not started — call start() first")
 
-            # Step 1: Navigate to the target URL (if provided)
-            if self.task.url:
+            # Step 1: Navigate so the browser is on the right page when the agent runs.
+            # With a saved login context, open Gmail inbox first so the session is already logged in.
+            if self._using_saved_context:
+                self.current_action = "Opening Gmail inbox (saved session)"
+                if on_action:
+                    await on_action(self.agent_id, self.current_action)
+                await self._session.navigate(url="https://mail.google.com/")
+            elif self.task.url:
                 self.current_action = f"Navigating to {self.task.url}"
                 if on_action:
                     await on_action(self.agent_id, self.current_action)
@@ -202,9 +210,10 @@ class BrowserAgent:
             if on_action:
                 await on_action(self.agent_id, self.current_action)
 
+            instruction = self.task.instruction
             execute_response = await self._session.execute(
                 execute_options={
-                    "instruction": self.task.instruction,
+                    "instruction": instruction,
                     "max_steps": self.task.max_steps,
                 },
                 agent_config={
