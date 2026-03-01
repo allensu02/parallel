@@ -105,7 +105,7 @@ export default function StatsBar({ run }: StatsBarProps) {
             run.status === "failed" ? "bg-error/15 text-error border-error/30" :
             "bg-surface-2 text-muted border-border"
           }`}>
-            {run.status === "running" ? "Bees buzzing..." : run.status}
+            {run.status === "running" ? "Running" : run.status}
           </span>
         </div>
       </div>

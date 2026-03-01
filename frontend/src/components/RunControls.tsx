@@ -21,7 +21,7 @@ export default function RunControls({ onRunCreated, disabled }: RunControlsProps
       onRunCreated(run);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      alert(`Failed to deploy swarm: ${message}`);
+      alert(`Failed to start run: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -68,7 +68,7 @@ export default function RunControls({ onRunCreated, disabled }: RunControlsProps
         ) : (
           <Hexagon className="w-4 h-4" />
         )}
-        Deploy Swarm
+        Start Run
       </motion.button>
     </motion.div>
   );

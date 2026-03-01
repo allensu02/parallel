@@ -139,93 +139,6 @@ function pixelToNearestAxial(px: number, py: number, size: number): Axial {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Idle floating bees — ambient hexagons drifting around
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-const IDLE_BEE_COUNT = 14;
-
-interface IdleBeeData {
-  x: number;      // % position
-  y: number;      // % position
-  size: number;   // px (half-width of the hex)
-  opacity: number;
-  delay: number;  // animation-delay in seconds
-}
-
-function IdleBees() {
-  const [bees, setBees] = useState<IdleBeeData[]>([]);
-
-  // Generate bee positions client-side only to avoid hydration mismatch
-  useEffect(() => {
-    const generated: IdleBeeData[] = [];
-    for (let i = 0; i < IDLE_BEE_COUNT; i++) {
-      generated.push({
-        x: Math.random() * 84 + 8,
-        y: Math.random() * 84 + 8,
-        size: 36 + Math.random() * 30, // 36-66px half-width → 72-132px full hex
-        opacity: 0.35 + Math.random() * 0.3,
-        delay: Math.random() * 12,
-      });
-    }
-    setBees(generated);
-  }, []);
-
-  if (bees.length === 0) return null;
-
-  return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-[1]">
-      {bees.map((bee, i) => {
-        const w = bee.size * 2;
-        const h = bee.size * Math.sqrt(3);
-        return (
-          <div
-            key={i}
-            className="idle-bee-wrapper"
-            style={{
-              position: "absolute",
-              left: `${bee.x}%`,
-              top: `${bee.y}%`,
-              width: w,
-              height: h,
-              opacity: bee.opacity,
-              animationDelay: `${bee.delay}s`,
-            }}
-          >
-            {/* Outer hex border — same as worker bees */}
-            <div
-              className="absolute inset-0 hex-cell"
-              style={{
-                width: w,
-                height: h,
-                backgroundColor: "rgba(212, 148, 10, 0.30)",
-              }}
-            />
-            {/* Inner hex surface — same as worker bees */}
-            <div
-              className="absolute hex-cell flex items-center justify-center"
-              style={{
-                width: w - 4,
-                height: h - 4,
-                left: 2,
-                top: 2,
-                backgroundColor: "rgba(45, 33, 17, 0.6)",
-              }}
-            >
-              <Hexagon
-                className="text-honey/20"
-                style={{ width: bee.size * 0.4, height: bee.size * 0.4 }}
-                strokeWidth={1.5}
-              />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-
-/* ═══════════════════════════════════════════════════════════════════════════
    Expanded browser view (modal overlay on hex click)
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -1290,7 +1203,7 @@ export default function LiveDraftPanel({
     [jobGrid]
   );
 
-  // In fullscreen mode, always render (even with no jobs — shows idle bees)
+  // In fullscreen mode, always render (even with no jobs)
   // In non-fullscreen mode, don't render if no jobs
   if (!fullscreen && jobs.length === 0) return null;
 
@@ -1302,9 +1215,6 @@ export default function LiveDraftPanel({
         className={`relative overflow-hidden honeycomb-bg ${fullscreen ? "w-full h-full" : "rounded-b-xl"}`}
         style={fullscreen ? undefined : { height: "min(60vh, 550px)" }}
       >
-        {/* Idle floating bees — ambient life across the entire screen */}
-        <IdleBees />
-
         {/* Floating honey particles — spread across full screen */}
         <div className="absolute inset-0 z-[2] pointer-events-none overflow-hidden">
           {Array.from({ length: fullscreen ? 30 : 20 }).map((_, i) => (

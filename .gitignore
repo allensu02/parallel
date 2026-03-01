@@ -3,6 +3,7 @@
 .env.local
 .env.*.local
 backend/.env
+backend/gmail_auth_state.json
 
 # Python
 __pycache__/
@@ -11,6 +12,9 @@ __pycache__/
 .venv/
 backend/.venv/
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Node
 node_modules/

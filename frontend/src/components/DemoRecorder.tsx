@@ -86,7 +86,7 @@ export default function DemoRecorder({ onDemoSaved, onClose }: DemoRecorderProps
             <Video className="w-3.5 h-3.5 text-honey" />
           </div>
           <span className="font-bold text-sm text-foreground">
-            {state === "done" ? "Demo Saved" : "Record a Demo"}
+            {state === "done" ? "Demo Saved" : "Record Workflow"}
           </span>
           {state === "recording" && (
             <span className="flex items-center gap-1.5 ml-2 px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/30 text-red-400 text-xs font-semibold">
@@ -118,7 +118,7 @@ export default function DemoRecorder({ onDemoSaved, onClose }: DemoRecorderProps
               <Hexagon className="w-8 h-8 text-honey" />
             </div>
             <div>
-              <p className="text-foreground font-semibold">Teach the Hive</p>
+              <p className="text-foreground font-semibold">Create a Reusable Workflow</p>
               <p className="text-muted text-sm mt-1">
                 Record a browser workflow to create a reusable procedure for your agents.
               </p>

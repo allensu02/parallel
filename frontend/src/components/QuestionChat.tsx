@@ -429,7 +429,7 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
                 )}
               </div>
               <span className="text-sm font-bold text-golden">
-                {pendingCount > 0 ? "Hive Needs Input" : reportCount > 0 ? "Hive Reports" : "Hive Questions"}
+                {pendingCount > 0 ? "Action Required" : reportCount > 0 ? "Run Reports" : "Run Questions"}
               </span>
               {pendingCount > 0 && (
                 <span className="text-[10px] font-bold bg-red-500/15 text-red-400 px-2 py-0.5 rounded-full border border-red-500/30 animate-pulse">

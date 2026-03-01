@@ -162,7 +162,7 @@ export default function InboxSelector({ onRunCreated, disabled }: InboxSelectorP
       onRunCreated(run, { ...contentCacheRef.current });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      alert(`Failed to deploy swarm: ${msg}`);
+      alert(`Failed to start run: ${msg}`);
     } finally {
       setStarting(false);
     }
@@ -367,7 +367,7 @@ export default function InboxSelector({ onRunCreated, disabled }: InboxSelectorP
           ) : (
             <Hexagon className="w-4 h-4" />
           )}
-          {starting ? "Deploying..." : `Deploy Swarm (${selected.size})`}
+          {starting ? "Starting..." : `Start Run (${selected.size})`}
         </motion.button>
       </div>
     </motion.div>

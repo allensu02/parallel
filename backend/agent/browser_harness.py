@@ -287,6 +287,17 @@ class BrowserHarness:
             if page:
                 await self.release_page(page)
 
+    def _is_target_closed_error(self, err: Exception) -> bool:
+        """Best-effort detection for Playwright closed target/context/browser errors."""
+        msg = str(err).lower()
+        return "targetclosederror" in msg or "has been closed" in msg
+
+    async def _recover_browser(self) -> None:
+        """Reconnect to Chrome and rebuild context/page pool after abrupt closure."""
+        print("[Harness] Recovering browser context after closed target...")
+        await self.stop()
+        await self.start()
+
 
     # ------------------------------------------------------------------
     # Page pool
@@ -294,40 +305,61 @@ class BrowserHarness:
 
     async def acquire_page(self) -> Page:
         """Get a page from the pool, creating on-demand up to pool_size. Never exceeds cap."""
-        # Try to get from pool first (non-blocking)
-        while not self._page_pool.empty():
-            page = self._page_pool.get_nowait()
+        for attempt in range(2):
+            # Try to get from pool first (non-blocking)
+            while not self._page_pool.empty():
+                page = self._page_pool.get_nowait()
+                try:
+                    if not page.is_closed():
+                        await page.evaluate("1+1")
+                        return page
+                except Exception:
+                    self._pool_created = max(0, self._pool_created - 1)
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+
+            # Pool empty — create a new page if under cap
+            if self._pool_created < self._pool_size and self._context:
+                try:
+                    new_page = await self._context.new_page()
+                    self._pool_created += 1
+                    return new_page
+                except Exception as e:
+                    if attempt == 0 and self._is_target_closed_error(e):
+                        await self._recover_browser()
+                        continue
+                    raise
+
+            # At cap — wait for a page to be released
+            page = await asyncio.wait_for(self._page_pool.get(), timeout=120)
             try:
                 if not page.is_closed():
                     await page.evaluate("1+1")
                     return page
-            except Exception:
+            except Exception as e:
                 self._pool_created = max(0, self._pool_created - 1)
+                if attempt == 0 and self._is_target_closed_error(e):
+                    await self._recover_browser()
+                    continue
+
+            # Last resort — create replacement if one died
+            if self._context:
                 try:
-                    await page.close()
-                except Exception:
-                    pass
+                    new_page = await self._context.new_page()
+                    self._pool_created += 1
+                    return new_page
+                except Exception as e:
+                    if attempt == 0 and self._is_target_closed_error(e):
+                        await self._recover_browser()
+                        continue
+                    raise
+            if attempt == 0:
+                await self._recover_browser()
+                continue
+            raise RuntimeError("No browser context available")
 
-        # Pool empty — create a new page if under cap
-        if self._pool_created < self._pool_size and self._context:
-            new_page = await self._context.new_page()
-            self._pool_created += 1
-            return new_page
-
-        # At cap — wait for a page to be released
-        page = await asyncio.wait_for(self._page_pool.get(), timeout=120)
-        try:
-            if not page.is_closed():
-                await page.evaluate("1+1")
-                return page
-        except Exception:
-            self._pool_created = max(0, self._pool_created - 1)
-
-        # Last resort — create replacement if one died
-        if self._context:
-            new_page = await self._context.new_page()
-            self._pool_created += 1
-            return new_page
         raise RuntimeError("No browser context available")
 
     async def release_page(self, page: Page) -> None:

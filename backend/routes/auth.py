@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
@@ -30,6 +31,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _USE_REAL_OAUTH = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+_PKCE_VERIFIERS: dict[str, str] = {}
 
 
 def _build_flow():
@@ -124,11 +126,16 @@ async def auth_login_get():
             detail="OAuth not configured. Use POST /api/auth/login for browser login.",
         )
     flow = _build_flow()
-    auth_url, _ = flow.authorization_url(
+    # Persist PKCE verifier by OAuth state so callback can exchange code.
+    verifier = secrets.token_urlsafe(64)
+    flow.code_verifier = verifier
+    auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
+        code_challenge_method="S256",
     )
+    _PKCE_VERIFIERS[state] = verifier
     return {"auth_url": auth_url}
 
 
@@ -137,11 +144,16 @@ async def auth_login_post():
     """Fallback: Playwright-based browser login, or return OAuth URL."""
     if _USE_REAL_OAUTH:
         flow = _build_flow()
-        auth_url, _ = flow.authorization_url(
+        # Persist PKCE verifier by OAuth state so callback can exchange code.
+        verifier = secrets.token_urlsafe(64)
+        flow.code_verifier = verifier
+        auth_url, state = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
             prompt="consent",
+            code_challenge_method="S256",
         )
+        _PKCE_VERIFIERS[state] = verifier
         return {"status": "redirect", "auth_url": auth_url}
     else:
         # No visible browser login — direct to OAuth
@@ -156,7 +168,7 @@ async def auth_login_post():
 # ---------------------------------------------------------------------------
 
 @router.get("/callback")
-async def auth_callback(code: str = "", error: str = ""):
+async def auth_callback(code: str = "", error: str = "", state: str = ""):
     """Handle the Google OAuth2 callback."""
     if error:
         return RedirectResponse(f"{FRONTEND_URL}?auth_error={error}")
@@ -170,6 +182,9 @@ async def auth_callback(code: str = "", error: str = ""):
         # is used, which causes a scope mismatch error. Disable the check.
         os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
         flow = _build_flow()
+        verifier = _PKCE_VERIFIERS.pop(state, "")
+        if verifier:
+            flow.code_verifier = verifier
         flow.fetch_token(code=code)
         creds = flow.credentials
 

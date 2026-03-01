@@ -97,7 +97,7 @@ export default function RunDetailPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-muted uppercase tracking-wide">
-                Agents ({jobs.length})
+                Jobs ({jobs.length})
               </h2>
               <div className="flex items-center gap-1 bg-surface rounded-lg p-1 border border-border">
                 <button

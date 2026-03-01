@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Hexagon, Mail, Calendar, Sparkles, Check,
   ChevronRight, ChevronLeft, Loader2, Settings,
@@ -101,7 +101,7 @@ export default function SetupPage() {
         <div className="w-16 h-16 hex-badge bg-gradient-to-br from-primary to-honey mx-auto mb-4 flex items-center justify-center">
           <Hexagon className="w-7 h-7 text-background" strokeWidth={2.5} />
         </div>
-        <h1 className="text-2xl font-bold text-golden">Set Up Your Hive</h1>
+        <h1 className="text-2xl font-bold text-golden">Set Up Parallel</h1>
         <p className="text-sm text-muted mt-1">Let the workers learn how you communicate</p>
       </motion.div>
 
@@ -144,11 +144,11 @@ export default function SetupPage() {
             <div className="space-y-4">
               <div className="flex items-center gap-2 mb-2">
                 <Sparkles className="w-5 h-5 text-primary" />
-                <h2 className="text-lg font-semibold">Let the Hive Learn Your Style</h2>
+                <h2 className="text-lg font-semibold">Learn Your Style</h2>
               </div>
               <p className="text-sm text-muted leading-relaxed">
                 We&apos;ll analyze your recent sent emails to understand your writing style,
-                tone, and preferences. This helps the worker bees draft replies that sound like you.
+                tone, and preferences. This helps workers draft replies in your voice.
               </p>
 
               {!analyzed ? (
@@ -215,7 +215,7 @@ export default function SetupPage() {
                 <h2 className="text-lg font-semibold">Your Preferences</h2>
               </div>
               <p className="text-sm text-muted">
-                Fine-tune how the worker bees draft your emails.
+                Fine-tune how workers draft your emails.
               </p>
 
               <div className="space-y-3">
@@ -328,14 +328,14 @@ export default function SetupPage() {
                 <h2 className="text-lg font-semibold">Calendar Integration</h2>
               </div>
               <p className="text-sm text-muted leading-relaxed">
-                Connect your calendar so the Hive can check your availability when scheduling
+                Connect your calendar so Parallel can check your availability when scheduling
                 meetings or responding to calendar-related emails.
               </p>
 
               {calendarConnected ? (
                 <div className="flex items-center gap-2 text-success text-sm p-3 rounded-lg bg-success/10 border border-success/20">
                   <Check className="w-4 h-4" />
-                  Calendar connected! The Hive can check your availability.
+                  Calendar connected! Parallel can check your availability.
                 </div>
               ) : (
                 <button
@@ -349,7 +349,7 @@ export default function SetupPage() {
 
               <p className="text-[10px] text-muted">
                 Calendar access was included in your Google sign-in. This just enables the
-                feature within the Hive.
+                feature within Parallel.
               </p>
             </div>
           )}
@@ -360,9 +360,9 @@ export default function SetupPage() {
               <div className="w-16 h-16 hex-badge bg-gradient-to-br from-success to-success/70 mx-auto flex items-center justify-center">
                 <Check className="w-7 h-7 text-background" strokeWidth={2.5} />
               </div>
-              <h2 className="text-lg font-semibold text-golden">Your Hive is Ready!</h2>
+              <h2 className="text-lg font-semibold text-golden">Workspace Ready</h2>
               <p className="text-sm text-muted leading-relaxed">
-                The worker bees are trained and ready to help you manage your inbox.
+                Your workers are configured and ready to help manage your inbox.
                 They&apos;ll draft replies that match your style and preferences.
               </p>
 
@@ -371,7 +371,7 @@ export default function SetupPage() {
                 className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-gradient-to-r from-primary to-primary-light hover:from-primary-light hover:to-honey transition-all text-background font-semibold shadow-lg shadow-primary/20"
               >
                 <Hexagon className="w-4 h-4" />
-                Go to Dashboard
+                Open Dashboard
               </button>
             </div>
           )}
