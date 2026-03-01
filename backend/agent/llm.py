@@ -79,6 +79,33 @@ From: {sender}
 Classification:"""
 
 
+_CLASSIFY_AND_CHECK_PROMPT = """\
+You are an email triage assistant. Given an email thread, do TWO things:
+
+1. Classify the required action as reply, ignore, or escalate.
+2. If the action is "reply", determine whether drafting a reply requires information only the user would know (e.g. availability for meetings, personal decisions, RSVPs).
+
+Respond in EXACTLY this format (three lines):
+ACTION: reply OR ignore OR escalate
+NEEDS_INFO: yes OR no
+QUESTION: (if NEEDS_INFO is yes, write the specific question to ask the user; otherwise write "none")
+
+Rules for ACTION:
+- "reply": The email requires or would benefit from a response.
+- "ignore": Notification, newsletter, automated — no response needed.
+- "escalate": Sensitive topics (legal, financial, HR) needing human review.
+
+Rules for NEEDS_INFO:
+- "yes" only if the reply genuinely requires personal info (availability, decisions, preferences).
+- "no" for thank-you emails, simple acknowledgements, informational replies.
+
+Email thread:
+Subject: {subject}
+From: {sender}
+
+{messages}"""
+
+
 async def classify_intent(
     subject: str, sender: str, messages: list[dict]
 ) -> tuple[IntentType, int]:
@@ -111,6 +138,61 @@ async def classify_intent(
         return IntentType.escalate, tokens
     else:
         return IntentType.ignore, tokens
+
+
+async def classify_and_check(
+    subject: str, sender: str, messages: list[dict]
+) -> tuple[IntentType, bool, str, int]:
+    """Classify intent AND check if user info is needed in ONE LLM call.
+
+    Returns (intent, needs_info, question_text, tokens_used).
+    """
+    client = _get_async_client()
+
+    messages_text = ""
+    for m in messages:
+        messages_text += f"\nFrom: {m.get('from', '')}\nDate: {m.get('date', '')}\n{m.get('body', m.get('snippet', ''))}\n---\n"
+
+    prompt = _CLASSIFY_AND_CHECK_PROMPT.format(
+        subject=subject,
+        sender=sender,
+        messages=messages_text[:4000],
+    )
+
+    resp = await _retry_on_rate_limit(
+        client.messages.create,
+        model="claude-sonnet-4-20250514",
+        max_tokens=150,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text = resp.content[0].text.strip()
+    tokens = (resp.usage.input_tokens or 0) + (resp.usage.output_tokens or 0)
+
+    # Parse the structured response
+    intent = IntentType.ignore
+    needs_info = False
+    question = ""
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.upper().startswith("ACTION:"):
+            val = line.split(":", 1)[1].strip().lower()
+            if "reply" in val:
+                intent = IntentType.reply
+            elif "escalate" in val:
+                intent = IntentType.escalate
+            else:
+                intent = IntentType.ignore
+        elif line.upper().startswith("NEEDS_INFO:"):
+            val = line.split(":", 1)[1].strip().lower()
+            needs_info = val in ("yes", "true")
+        elif line.upper().startswith("QUESTION:"):
+            question = line.split(":", 1)[1].strip()
+            if question.lower() == "none":
+                question = ""
+
+    return intent, needs_info, question, tokens
 
 
 # ---------------------------------------------------------------------------
@@ -163,19 +245,7 @@ async def generate_draft(
     draft_text = resp.content[0].text.strip()
     tokens = (resp.usage.input_tokens or 0) + (resp.usage.output_tokens or 0)
 
-    # Generate summary
-    summary_resp = await _retry_on_rate_limit(
-        client.messages.create,
-        model="claude-sonnet-4-20250514",
-        max_tokens=60,
-        messages=[{
-            "role": "user",
-            "content": f"Summarize this email draft in one sentence (max 15 words):\n\n{draft_text}",
-        }],
-    )
-    summary = summary_resp.content[0].text.strip()
-    tokens += (summary_resp.usage.input_tokens or 0) + (summary_resp.usage.output_tokens or 0)
-
+    summary = _local_summary(draft_text)
     confidence = min(0.95, max(0.5, len(draft_text) / 500))
     return draft_text, summary, confidence, tokens
 
@@ -281,21 +351,28 @@ async def generate_draft_stream(
     draft_text = "".join(draft_parts).strip()
     tokens = input_tokens + output_tokens
 
-    # Generate summary (non-streaming, small call)
-    summary_resp = await _retry_on_rate_limit(
-        client.messages.create,
-        model="claude-sonnet-4-20250514",
-        max_tokens=60,
-        messages=[{
-            "role": "user",
-            "content": f"Summarize this email draft in one sentence (max 15 words):\n\n{draft_text}",
-        }],
-    )
-    summary = summary_resp.content[0].text.strip()
-    tokens += (summary_resp.usage.input_tokens or 0) + (summary_resp.usage.output_tokens or 0)
+    # Generate summary locally (avoid extra LLM call to save rate limit)
+    summary = _local_summary(draft_text)
 
     confidence = min(0.95, max(0.5, len(draft_text) / 500))
     return draft_text, summary, confidence, tokens
+
+
+def _local_summary(draft_text: str) -> str:
+    """Generate a short summary from the draft text without an LLM call."""
+    if not draft_text:
+        return "Empty draft"
+    # Take the first sentence or first 80 chars
+    first_line = draft_text.split("\n")[0].strip()
+    # Find first sentence end
+    for end in (".", "!", "?"):
+        idx = first_line.find(end)
+        if idx > 0 and idx < 100:
+            return first_line[: idx + 1]
+    # Truncate if too long
+    if len(first_line) > 80:
+        return first_line[:77] + "..."
+    return first_line or draft_text[:80]
 
 
 # ---------------------------------------------------------------------------

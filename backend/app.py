@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -49,11 +50,12 @@ async def lifespan(app: FastAPI):
     await get_db()
     # Recover any runs that were interrupted by a server restart
     await _recover_stale_runs()
-    # Start browser harness (headless, will use saved auth state if available)
+    # Start headless browser (no visible windows — streamed to hex UI)
     try:
-        await harness.start(headless=True)
+        await harness.start()
+        await harness.ensure_gmail_auth()
     except Exception as e:
-        print(f"[Startup] Browser harness start deferred: {e}")
+        print(f"[Startup] Browser harness: {e}")
     yield
     # Shutdown
     await harness.stop()

@@ -1,12 +1,14 @@
 """Agent engine — orchestrates the step machine for each email thread.
 
 Pipeline:
-1. Extract thread content via Gmail API (or DOM fallback)
-2. Classify intent via LLM
-3. Check if user input is needed → pause if so
-4. Generate draft via streaming LLM (tokens sent to frontend live)
-5. Wait for user approval
-6. On approval: compose in Gmail via API (or Computer Use fallback)
+1. Acquire dedicated browser page + start screencast
+2. Fetch thread content via Gmail API (fast) while browser shows the email
+3. Classify intent via LLM
+4. Check if user input is needed → pause if so
+5. Generate draft via streaming LLM (tokens sent to frontend live)
+6. Visual compose: navigate to thread, click reply, type draft in real Chrome
+7. Wait for user approval
+8. On approval: save draft via Gmail API
 """
 
 from __future__ import annotations
@@ -20,9 +22,8 @@ from playwright.async_api import Page
 
 from backend import database as db
 from backend.agent.browser_harness import harness
-from backend.agent import text_extractor
-from backend.agent import computer_use
 from backend.agent import llm
+from backend.agent import screencast as sc
 from backend.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
@@ -37,7 +38,8 @@ from backend.routes.events import publish_event, publish_global
 # Concurrency semaphores
 # ---------------------------------------------------------------------------
 
-_browser_sem = asyncio.Semaphore(8)
+from backend.config import BROWSER_POOL_SIZE
+_browser_sem = asyncio.Semaphore(BROWSER_POOL_SIZE)
 _llm_sem = asyncio.Semaphore(LLM_CONCURRENCY)
 _api_sem = asyncio.Semaphore(25)  # Gmail API concurrent requests
 
@@ -51,7 +53,6 @@ _cancelled_runs: set[str] = set()
 
 
 def cancel_run(run_id: str) -> None:
-    """Mark a run for cancellation. Workers will check this flag."""
     _cancelled_runs.add(run_id)
 
 
@@ -60,12 +61,11 @@ def _is_cancelled(run_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Pending approval / answer events — job_id -> asyncio.Event
+# Pending approval / answer events
 # ---------------------------------------------------------------------------
 
 _approval_events: dict[str, asyncio.Event] = {}
 _approval_data: dict[str, dict] = {}
-
 _answer_events: dict[str, asyncio.Event] = {}
 _answer_data: dict[str, str] = {}
 
@@ -138,40 +138,16 @@ async def _run_step(
 
 
 # ---------------------------------------------------------------------------
-# Screenshot callback for Computer Use (approval phase only)
-# ---------------------------------------------------------------------------
-
-
-def _make_screenshot_cb(run_id: str, job_id: str, step_name: str):
-    _latest_path = {"path": ""}
-
-    async def _cb(b64_data: str) -> None:
-        path = harness.save_screenshot_b64(b64_data, job_id, step_name)
-        _latest_path["path"] = path
-        await _emit(run_id, "job.screenshot", {"job_id": job_id, "step": step_name, "url": path})
-
-    _cb.latest_path = _latest_path  # type: ignore
-    return _cb
-
-
-# ---------------------------------------------------------------------------
 # Step functions
 # ---------------------------------------------------------------------------
 
 
 async def _step_fetch_thread_api(thread_id: str) -> dict:
-    """Fetch via Gmail API (no browser needed)."""
     from backend.services.google_api import fetch_thread_content_api
     return await fetch_thread_content_api(thread_id)
 
 
-async def _step_fetch_thread_browser(page: Page, thread_id: str) -> dict:
-    """Fetch via Playwright DOM extraction."""
-    return await text_extractor.extract_thread_content(page, thread_id)
-
-
 async def _step_compose_via_api(draft_text: str, thread_id: str) -> bool:
-    """Create draft via Gmail API."""
     from backend.services.google_api import create_draft_api
     result = await create_draft_api(thread_id, draft_text)
     return bool(result and result.get("draft_id"))
@@ -209,6 +185,238 @@ async def _step_generate_draft_stream(
 
 
 # ---------------------------------------------------------------------------
+# Visual compose — navigate to Gmail thread and type draft in real Chrome
+# ---------------------------------------------------------------------------
+
+GMAIL_THREAD_URL = "https://mail.google.com/mail/u/0/#inbox/{thread_id}"
+
+
+_account_chooser_warned = False
+
+
+async def _handle_account_chooser(page: Page) -> None:
+    """If the page landed on Google 'Choose an account', auto-click first account."""
+    global _account_chooser_warned
+    url = page.url
+    if "accounts.google.com" not in url or "signin/rejected" in url:
+        return
+
+    has_accounts = await page.evaluate("""
+        () => document.querySelectorAll('[data-identifier], [data-authuser]').length > 0
+    """)
+
+    if not has_accounts:
+        if not _account_chooser_warned:
+            print("[Engine] Page on Google sign-in (no accounts to choose). Browser needs manual sign-in.")
+            _account_chooser_warned = True
+        return
+
+    print("[Engine] Page hit account chooser, auto-clicking first account...")
+    for selector in ['div[data-identifier]', 'div[data-authuser]', 'li[data-identifier]']:
+        try:
+            el = await page.wait_for_selector(selector, timeout=2000)
+            if el:
+                await el.click()
+                break
+        except Exception:
+            continue
+    try:
+        await page.wait_for_url("**/mail.google.com/**", timeout=15000)
+        await page.wait_for_timeout(2000)
+    except Exception:
+        pass
+
+
+async def _wait_for_gmail_ready(page: Page, timeout_ms: int = 15000) -> bool:
+    """Wait for Gmail's main UI to be interactive. Returns True if ready."""
+    try:
+        # Wait for Gmail's main navigation OR message list to appear
+        await page.wait_for_selector(
+            'div[role="navigation"], div[role="main"], div.nH, div.AO',
+            timeout=timeout_ms,
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _wait_for_thread_view(page: Page, timeout_ms: int = 10000) -> bool:
+    """Wait for a Gmail thread to actually render (message body visible)."""
+    try:
+        # Thread-view selectors: message body, thread subject, message containers
+        await page.wait_for_selector(
+            'div.adn, h2.hP, div[role="listitem"], div.gs, table.cf.gJ',
+            timeout=timeout_ms,
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _ensure_gmail_thread_loaded(page: Page, thread_id: str, job_id: str) -> bool:
+    """Navigate to a Gmail thread and ensure it actually renders.
+    Returns True if the thread view is visible."""
+    thread_url = GMAIL_THREAD_URL.format(thread_id=thread_id)
+
+    # Check if we're already on this thread
+    current_url = page.url
+    if f"/{thread_id}" in current_url and "mail.google.com" in current_url:
+        # Already on the right thread — just check if content loaded
+        if await _wait_for_thread_view(page, timeout_ms=3000):
+            return True
+
+    # Navigate to thread
+    print(f"[Engine] Job {job_id}: Navigating to Gmail thread {thread_id}")
+    try:
+        await page.goto(thread_url, wait_until="domcontentloaded", timeout=20000)
+    except Exception as e:
+        print(f"[Engine] Job {job_id}: Navigation error (non-fatal): {e}")
+
+    # Handle account chooser if redirected
+    await _handle_account_chooser(page)
+
+    # Wait for Gmail to be ready
+    gmail_ready = await _wait_for_gmail_ready(page, timeout_ms=10000)
+    if not gmail_ready:
+        print(f"[Engine] Job {job_id}: Gmail didn't load in time (url: {page.url[:80]})")
+        return False
+
+    # If we landed on inbox instead of thread, try hash navigation
+    current_url = page.url
+    if "mail.google.com" in current_url and f"/{thread_id}" not in current_url:
+        print(f"[Engine] Job {job_id}: Landed on inbox, trying hash navigation...")
+        try:
+            await page.evaluate(f"() => window.location.hash = '#inbox/{thread_id}'")
+            await page.wait_for_timeout(2000)
+        except Exception:
+            pass
+
+    # Wait for thread content to render
+    thread_loaded = await _wait_for_thread_view(page, timeout_ms=8000)
+    if not thread_loaded:
+        print(f"[Engine] Job {job_id}: Thread view didn't render (url: {page.url[:80]})")
+        # One more attempt: full page reload
+        try:
+            await page.reload(wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(3000)
+            thread_loaded = await _wait_for_thread_view(page, timeout_ms=5000)
+        except Exception:
+            pass
+
+    if thread_loaded:
+        print(f"[Engine] Job {job_id}: Thread loaded successfully")
+    else:
+        print(f"[Engine] Job {job_id}: Thread may not have loaded (continuing anyway)")
+
+    return thread_loaded
+
+
+async def _visual_compose_in_browser(page: Page, thread_id: str, draft_text: str, run_id: str, job_id: str) -> None:
+    """Navigate to a Gmail thread, click Reply, and type the draft text visibly."""
+
+    # Ensure thread is loaded (may already be loaded from step 1)
+    await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "navigating"})
+    thread_ok = await _ensure_gmail_thread_loaded(page, thread_id, job_id)
+
+    if not thread_ok:
+        print(f"[Engine] Job {job_id}: Skipping visual compose — thread didn't load")
+        await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "skipped_no_thread"})
+        return
+
+    # Click Reply button
+    await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "clicking_reply"})
+    reply_clicked = False
+
+    # First try keyboard shortcut 'r' (most reliable in Gmail)
+    try:
+        # Click on the page body first to ensure focus is on Gmail
+        await page.click('body', timeout=2000)
+        await page.wait_for_timeout(300)
+        await page.keyboard.press("r")
+        await page.wait_for_timeout(1500)
+
+        # Check if compose box appeared
+        compose_check = page.locator(
+            'div[aria-label="Message Body"][contenteditable="true"], '
+            'div[role="textbox"][aria-label="Message Body"], '
+            'div[contenteditable="true"][g_editable="true"]'
+        ).first
+        try:
+            await compose_check.wait_for(state="visible", timeout=3000)
+            reply_clicked = True
+            print(f"[Engine] Job {job_id}: Reply opened via keyboard shortcut")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Fallback: click Reply button
+    if not reply_clicked:
+        for sel in [
+            '[data-tooltip="Reply"]',
+            'div[role="button"][data-tooltip*="Reply"]',
+            'span[role="link"]:has-text("Reply")',
+            '.ams.bkH',
+            'div[aria-label="Reply"]',
+        ]:
+            try:
+                btn = page.locator(sel).first
+                await btn.wait_for(state="visible", timeout=2000)
+                await btn.click()
+                reply_clicked = True
+                print(f"[Engine] Job {job_id}: Reply clicked via selector: {sel}")
+                break
+            except Exception:
+                continue
+
+    if not reply_clicked:
+        print(f"[Engine] Job {job_id}: Could not find Reply button — trying 'r' shortcut again")
+        try:
+            await page.keyboard.press("r")
+        except Exception:
+            pass
+
+    await page.wait_for_timeout(1000)
+
+    # Type draft in compose box
+    await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "typing_draft"})
+    compose_box = None
+    for sel in [
+        'div[aria-label="Message Body"][contenteditable="true"]',
+        'div[role="textbox"][aria-label="Message Body"]',
+        'div.Am.Al.editable',
+        'div[contenteditable="true"][g_editable="true"]',
+        'div[contenteditable="true"]',
+    ]:
+        try:
+            el = page.locator(sel).first
+            await el.wait_for(state="visible", timeout=3000)
+            compose_box = el
+            print(f"[Engine] Job {job_id}: Found compose box via: {sel}")
+            break
+        except Exception:
+            continue
+
+    if compose_box:
+        await compose_box.click()
+        await page.wait_for_timeout(300)
+        words = draft_text.split(" ")
+        for i, word in enumerate(words):
+            if _is_cancelled(run_id):
+                break
+            text = word if i == len(words) - 1 else word + " "
+            await page.keyboard.type(text, delay=15)
+            if i % 10 == 9:
+                await page.wait_for_timeout(60)
+        print(f"[Engine] Job {job_id}: Draft typed ({len(words)} words)")
+    else:
+        print(f"[Engine] Job {job_id}: Could not find compose box — draft NOT typed visually")
+
+    await _emit(run_id, "job.visual_step", {"job_id": job_id, "step": "draft_typed"})
+    await page.wait_for_timeout(500)
+
+
+# ---------------------------------------------------------------------------
 # Job handler — full pipeline for one email thread
 # ---------------------------------------------------------------------------
 
@@ -219,7 +427,6 @@ async def _process_job(job_data: dict) -> None:
     thread_id = job_data["thread_id"]
     subject = job_data.get("subject", "")
 
-    # Check cancellation before starting
     if _is_cancelled(run_id):
         await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
         await db.increment_run_counter(run_id, "skipped_jobs")
@@ -227,31 +434,36 @@ async def _process_job(job_data: dict) -> None:
 
     await db.update_job(job_id, status="running", started_at=_now(), attempt=job_data.get("attempt", 1))
     await _emit(run_id, "job.started", {"job_id": job_id, "thread_id": thread_id})
+    print(f"[Engine] Job {job_id}: Started (thread={thread_id[:12]}..., subject={subject[:40]})")
 
+    # Semaphore limits concurrent browser pages — only BROWSER_POOL_SIZE jobs at once
     page: Page | None = None
+    _sem_held = True
+    await _browser_sem.acquire()
     try:
-        # ── Step 1: Fetch thread ──
-        if _USE_API:
-            # Gmail API — no browser needed, uses API semaphore
-            thread_data = await _run_step(
-                run_id, job_id, "fetch_thread",
-                _step_fetch_thread_api, thread_id,
-                semaphore=_api_sem, timeout=15,
-            )
-        else:
-            async with _browser_sem:
-                page = await harness.acquire_page()
-                thread_data = await _run_step(
-                    run_id, job_id, "fetch_thread",
-                    _step_fetch_thread_browser, page, thread_id,
-                    timeout=30,
-                )
-                await harness.release_page(page)
-                page = None
+        page = await harness.acquire_page()
+
+        # Start CDP screencast on this page
+        await sc.start_screencast(page, job_id, run_id)
+
+        # ── Step 1: Fetch thread via API + navigate browser (parallel) ──
+        await db.update_job(job_id, current_step="fetch_thread")
+        await _emit(run_id, "step.started", {"job_id": job_id, "step": "fetch_thread", "step_id": ""})
+
+        fetch_start = datetime.now(timezone.utc)
+
+        async def _navigate_to_thread() -> None:
+            await _ensure_gmail_thread_loaded(page, thread_id, job_id)
+
+        nav_task = asyncio.create_task(_navigate_to_thread())
+        api_task = asyncio.create_task(_step_fetch_thread_api(thread_id))
+        await nav_task
+        thread_data = await api_task
+
+        fetch_elapsed = int((datetime.now(timezone.utc) - fetch_start).total_seconds() * 1000)
+        await _emit(run_id, "step.completed", {"job_id": job_id, "step": "fetch_thread", "step_id": "", "duration_ms": fetch_elapsed})
 
         if _is_cancelled(run_id):
-            await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
-            await db.increment_run_counter(run_id, "skipped_jobs")
             return
 
         subject = thread_data.get("subject", subject) or "(no subject)"
@@ -264,36 +476,28 @@ async def _process_job(job_data: dict) -> None:
             "message_count": thread_data.get("message_count", 0),
         })
 
-        # ── Step 2: Classify intent via LLM ──
-        intent_result = await _run_step(
+        # ── Step 2: Classify intent + check needs info (single LLM call) ──
+        classify_result = await _run_step(
             run_id, job_id, "classify_intent",
-            llm.classify_intent, subject, sender, messages,
+            llm.classify_and_check, subject, sender, messages,
             semaphore=_llm_sem,
         )
-        intent, classify_tokens = intent_result
+        intent, needs_info, question_text, classify_tokens = classify_result
         await db.update_job(job_id, intent=intent.value, tokens_used=classify_tokens)
         await _emit(run_id, "job.classified", {"job_id": job_id, "intent": intent.value, "tokens": classify_tokens})
+        print(f"[Engine] Job {job_id}: Classified as {intent.value} (tokens: {classify_tokens})")
 
         if _is_cancelled(run_id):
-            await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
-            await db.increment_run_counter(run_id, "skipped_jobs")
             return
 
-        # ── Branch on intent ──
         if intent in (IntentType.ignore, IntentType.escalate):
             await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
             await db.increment_run_counter(run_id, "skipped_jobs")
             await _emit(run_id, "job.skipped", {"job_id": job_id, "reason": intent.value})
             return
 
-        # ── Step 2.5: Check if user input needed ──
+        # ── Step 2.5: Prompt user if info needed ──
         extra_context = ""
-        try:
-            async with _llm_sem:
-                needs_info, question_text = await _step_check_needs_info(subject, sender, messages)
-        except Exception:
-            needs_info = False
-            question_text = ""
 
         if needs_info and question_text:
             q = await db.create_question(job_id, run_id, question_text, context="email")
@@ -315,8 +519,6 @@ async def _process_job(job_data: dict) -> None:
                 _answer_data.pop(job_id, None)
 
         if _is_cancelled(run_id):
-            await db.update_job(job_id, status="skipped", current_step="done", finished_at=_now())
-            await db.increment_run_counter(run_id, "skipped_jobs")
             return
 
         # ── Step 3: Generate draft via streaming LLM ──
@@ -342,9 +544,21 @@ async def _process_job(job_data: dict) -> None:
             "job_id": job_id, "draft_text": draft_text,
             "summary": summary, "confidence": confidence, "tokens_used": total_tokens,
         })
+        print(f"[Engine] Job {job_id}: Draft generated ({len(draft_text)} chars, {draft_elapsed}ms, conf={confidence})")
 
-        # ── Step 4: Wait for user approval ──
-        await db.update_job(job_id, status="pending_approval")
+        # ── Step 4: Visual compose — type draft in real Chrome browser ──
+        await db.update_job(job_id, current_step="visual_compose")
+        await _emit(run_id, "step.started", {"job_id": job_id, "step": "visual_compose", "step_id": ""})
+        vc_start = datetime.now(timezone.utc)
+        try:
+            await _visual_compose_in_browser(page, thread_id, draft_text, run_id, job_id)
+        except Exception as vc_err:
+            print(f"[Engine] Visual compose error (non-fatal): {vc_err}")
+        vc_elapsed = int((datetime.now(timezone.utc) - vc_start).total_seconds() * 1000)
+        await _emit(run_id, "step.completed", {"job_id": job_id, "step": "visual_compose", "step_id": "", "duration_ms": vc_elapsed})
+
+        # ── Step 5: Wait for user approval ──
+        await db.update_job(job_id, status="pending_approval", current_step="pending_approval")
         await _emit(run_id, "job.pending_approval", {
             "job_id": job_id, "draft_text": draft_text, "subject": subject,
         })
@@ -369,75 +583,64 @@ async def _process_job(job_data: dict) -> None:
             await _emit(run_id, "job.skipped", {"job_id": job_id, "reason": "discarded"})
             return
 
-        # ── Step 5: Compose in Gmail ──
-        if _USE_API:
-            await _run_step(
-                run_id, job_id, "save_draft",
-                _step_compose_via_api, final_draft, thread_id,
-                semaphore=_api_sem, timeout=15,
-            )
-            await db.update_job(job_id, draft_id="api-draft")
-        else:
-            async with _browser_sem:
-                page = await harness.acquire_page()
-                try:
-                    await _run_step(
-                        run_id, job_id, "save_draft",
-                        lambda: computer_use.compose_draft_reply(page, final_draft,
-                            on_screenshot=_make_screenshot_cb(run_id, job_id, "save_draft")),
-                        timeout=60,
-                    )
-                    await db.update_job(job_id, draft_id="browser-draft")
-
-                    try:
-                        await _run_step(
-                            run_id, job_id, "apply_label",
-                            lambda: computer_use.apply_label(page, "AI-Drafted",
-                                on_screenshot=_make_screenshot_cb(run_id, job_id, "apply_label")),
-                            timeout=30,
-                        )
-                    except Exception as label_err:
-                        print(f"[Engine] Label step failed (non-fatal): {label_err}")
-                finally:
-                    await harness.release_page(page)
-                    page = None
+        # ── Step 5: Save draft via Gmail API ──
+        await _run_step(
+            run_id, job_id, "save_draft",
+            _step_compose_via_api, final_draft, thread_id,
+            semaphore=_api_sem, timeout=15,
+        )
+        await db.update_job(job_id, draft_id="api-draft")
 
         # ── Done ──
         await db.update_job(job_id, status="completed", current_step="done", finished_at=_now())
         await db.increment_run_counter(run_id, "completed_jobs")
         await _emit(run_id, "job.completed", {
-            "job_id": job_id, "draft_id": "api-draft" if _USE_API else "browser-draft",
+            "job_id": job_id, "draft_id": "api-draft",
             "confidence": confidence, "summary": summary, "tokens_used": total_tokens,
         })
+
+        # Keep page alive briefly so user can see the completed state in browser
+        if page:
+            try:
+                await page.wait_for_timeout(2000)
+            except Exception:
+                pass
 
     except Exception as exc:
         err_msg = f"{type(exc).__name__}: {exc}"
         attempt = job_data.get("attempt", 1)
-
-        if page:
-            try:
-                err_ss = await harness.save_screenshot(page, job_id, "error")
-                await _emit(run_id, "job.screenshot", {"job_id": job_id, "step": "error", "url": err_ss})
-            except Exception:
-                pass
+        print(f"[Engine] Job {job_id} ERROR (attempt {attempt}/{MAX_RETRIES}): {err_msg}")
+        print(traceback.format_exc()[-800:])
 
         if attempt < MAX_RETRIES and not _is_cancelled(run_id):
             backoff = min(10, (2 ** attempt) + random.uniform(0, 0.5))
+            print(f"[Engine] Job {job_id}: Retrying in {backoff:.1f}s (attempt {attempt + 1})")
             await db.update_job(job_id, status="queued", error_msg=err_msg)
             await _emit(run_id, "job.retrying", {
                 "job_id": job_id, "attempt": attempt + 1,
                 "backoff_ms": int(backoff * 1000), "error": err_msg,
             })
+            await sc.stop_screencast(job_id)
+            if page:
+                await harness.release_page(page)
+                page = None
+            _browser_sem.release()
+            _sem_held = False
             await asyncio.sleep(backoff)
             job_data["attempt"] = attempt + 1
             await _process_job(job_data)
+            return
         else:
+            print(f"[Engine] Job {job_id}: FAILED permanently after {attempt} attempts")
             await db.update_job(job_id, status="failed", error_msg=err_msg, finished_at=_now())
             await db.increment_run_counter(run_id, "failed_jobs")
             await _emit(run_id, "job.failed", {"job_id": job_id, "error": err_msg, "traceback": traceback.format_exc()[-500:]})
     finally:
+        await sc.stop_screencast(job_id)
         if page:
             await harness.release_page(page)
+        if _sem_held:
+            _browser_sem.release()
 
 
 # ---------------------------------------------------------------------------
@@ -447,12 +650,17 @@ async def _process_job(job_data: dict) -> None:
 
 async def start_run(run_id: str, thread_ids: list[str] | None = None, thread_subjects: dict[str, str] | None = None) -> None:
     try:
-        # Only start browser if we actually need it (no API)
-        if not _USE_API and not harness._started:
-            await harness.start(headless=True)
+        # Ensure headless browser is running
+        if not harness._started:
+            await harness.start()
+
+        # Quick auth check
+        if not harness.authenticated:
+            await harness.ensure_gmail_auth()
 
         await db.update_run(run_id, status="running")
         await _emit(run_id, "run.started", {"run_id": run_id})
+        print(f"[Engine] Run {run_id}: Started (auth={harness.authenticated})")
 
         if not thread_ids:
             await db.update_run(run_id, status="completed", finished_at=_now())
@@ -479,24 +687,14 @@ async def start_run(run_id: str, thread_ids: list[str] | None = None, thread_sub
             })
 
         await _emit(run_id, "run.jobs_queued", {"run_id": run_id, "count": len(job_items)})
+        print(f"[Engine] Run {run_id}: Launching {len(job_items)} jobs (browser pool: {BROWSER_POOL_SIZE}, LLM concurrency: {LLM_CONCURRENCY})")
 
-        if _USE_API:
-            # Gmail API mode — launch ALL jobs as concurrent tasks (no browser bottleneck)
-            # The _api_sem and _llm_sem control actual concurrency
-            tasks = [asyncio.create_task(_process_job(item)) for item in job_items]
-            await asyncio.gather(*tasks, return_exceptions=True)
-        else:
-            # Playwright mode — use queue with bounded workers
-            from backend.agent.queue import JobQueue
-            queue = JobQueue()
-            queue.set_handler(_process_job)
-            for item in job_items:
-                await queue.put(item)
-            pool_workers = min(len(job_items), harness._pool_size)
-            await queue.start(num_workers=pool_workers)
-            await queue.wait_done()
+        # Launch all jobs as concurrent tasks
+        tasks = [asyncio.create_task(_process_job(item)) for item in job_items]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         # Finalize
+        await sc.cleanup_run(run_id)
         _cancelled_runs.discard(run_id)
         run = await db.get_run(run_id)
         final_status = "completed" if run_id not in _cancelled_runs else "cancelled"
@@ -513,6 +711,7 @@ async def start_run(run_id: str, thread_ids: list[str] | None = None, thread_sub
         err = f"{type(exc).__name__}: {exc}"
         print(f"[Engine] Run {run_id} FAILED: {err}")
         print(traceback.format_exc())
+        await sc.cleanup_run(run_id)
         _cancelled_runs.discard(run_id)
         await db.update_run(run_id, status="failed", finished_at=_now())
         await _emit(run_id, "run.failed", {"run_id": run_id, "error": err})

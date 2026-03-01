@@ -1,11 +1,12 @@
-"""Playwright browser harness — manages browser lifecycle and page pool.
+"""Browser harness — launches REAL Chrome with remote debugging for Gmail access.
 
-All Gmail interaction is delegated to the Claude computer use agent
-(computer_use.py). This module only handles:
-- Browser launch / shutdown
-- Auth state persistence (login via visible browser, save cookies)
-- Page pool for concurrent agent work
-- Screenshot saving to disk
+Strategy:
+  - Launch the user's actual Chrome installation (/Applications/Google Chrome.app)
+    with --remote-debugging-port and a dedicated persistent profile directory.
+  - Real Chrome is NOT flagged as an automated browser, so Google sign-in works.
+  - Playwright connects via CDP for page management, screenshots, and screencast.
+  - The persistent profile (~/.hive-chrome-profile/) retains cookies across restarts,
+    so the user only needs to sign in to Gmail ONCE.
 """
 
 from __future__ import annotations
@@ -13,13 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
-
-# Tell Playwright to look for browsers inside the package directory
-# (where `playwright install` with PLAYWRIGHT_BROWSERS_PATH=0 placed them)
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
 from playwright.async_api import (
     Browser,
@@ -40,16 +40,36 @@ STORAGE_STATE_PATH = _BASE / "gmail_auth_state.json"
 SCREENSHOTS_DIR = _BASE / "screenshots"
 SCREENSHOTS_DIR.mkdir(exist_ok=True)
 
+# Persistent Chrome profile — survives restarts, keeps cookies
+CHROME_PROFILE_DIR = Path.home() / ".hive-chrome-profile"
+CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
 GMAIL_INBOX = "https://mail.google.com/mail/u/0/#inbox"
+
+# Find the real Chrome executable
+_CHROME_PATHS = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    shutil.which("google-chrome") or "",
+    shutil.which("google-chrome-stable") or "",
+]
+
+
+def _find_chrome() -> str | None:
+    for p in _CHROME_PATHS:
+        if p and Path(p).exists():
+            return p
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Browser Harness
 # ---------------------------------------------------------------------------
 
+_CDP_PORT = 9222
+
 
 class BrowserHarness:
-    """Manages a Playwright Chromium browser and a pool of pages."""
+    """Manages a real Chrome browser with Playwright page pool."""
 
     def __init__(self) -> None:
         self._pw: Playwright | None = None
@@ -57,18 +77,16 @@ class BrowserHarness:
         self._context: BrowserContext | None = None
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
         self._pool_size: int = BROWSER_POOL_SIZE
+        self._pool_created: int = 0
         self._started: bool = False
         self._authenticated: bool = False
         self._email: str = ""
+        self._chrome_proc: subprocess.Popen | None = None
 
-        # Login browser refs (temporary, closed after login)
-        self._login_browser: Browser | None = None
-        self._login_context: BrowserContext | None = None
-        self._login_page: Page | None = None
 
     @property
     def authenticated(self) -> bool:
-        return self._authenticated and STORAGE_STATE_PATH.exists()
+        return self._authenticated
 
     @property
     def email(self) -> str:
@@ -78,256 +96,271 @@ class BrowserHarness:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def start(self, headless: bool = True) -> None:
-        """Launch browser and populate the page pool."""
+    async def start(self) -> None:
+        """Start headless Chrome (or connect to existing) for background browser work.
+        No visible windows — everything is streamed via CDP screencast to the hex UI."""
         if self._started:
             return
 
+        import urllib.request
+        cdp_url = f"http://127.0.0.1:{_CDP_PORT}"
+
+        # --- Try connecting to already-running Chrome ---
+        chrome_running = False
+        try:
+            resp = urllib.request.urlopen(f"{cdp_url}/json/version", timeout=2)
+            import json as _json
+            info = _json.loads(resp.read())
+            browser_str = info.get("Browser", "")
+
+            if "headless" in browser_str.lower() or "HeadlessChrome" in browser_str:
+                chrome_running = True
+                print(f"[Harness] Reusing headless Chrome on port {_CDP_PORT}")
+            else:
+                # Visible Chrome is running — kill it so we can relaunch headless
+                print(f"[Harness] Found visible Chrome ({browser_str}) — restarting as headless...")
+                await self._kill_stale_chrome()
+                chrome_running = False
+        except Exception:
+            pass
+
+        if not chrome_running:
+            chrome_path = _find_chrome()
+            if not chrome_path:
+                raise RuntimeError("Chrome not found. Install Google Chrome.")
+
+            chrome_args = [
+                chrome_path,
+                f"--remote-debugging-port={_CDP_PORT}",
+                f"--user-data-dir={CHROME_PROFILE_DIR}",
+                "--headless=new",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-default-apps",
+                "--disable-popup-blocking",
+                "--disable-translate",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--noerrdialogs",
+                "--disable-session-crashed-bubble",
+                "--window-size=1280,900",
+            ]
+
+            print(f"[Harness] Starting headless Chrome (profile: {CHROME_PROFILE_DIR})")
+            self._chrome_proc = subprocess.Popen(
+                chrome_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+            for _ in range(30):
+                try:
+                    urllib.request.urlopen(f"{cdp_url}/json/version", timeout=1)
+                    break
+                except Exception:
+                    await asyncio.sleep(0.5)
+            else:
+                raise RuntimeError(f"Chrome failed to start on port {_CDP_PORT}")
+
+        # --- Connect Playwright via CDP ---
         self._pw = await async_playwright().start()
+        self._browser = await self._pw.chromium.connect_over_cdp(cdp_url)
 
-        storage = str(STORAGE_STATE_PATH) if STORAGE_STATE_PATH.exists() else None
+        contexts = self._browser.contexts
+        if contexts:
+            self._context = contexts[0]
+            # Close leftover tabs from previous sessions
+            for p in list(self._context.pages):
+                try:
+                    await p.close()
+                except Exception:
+                    pass
+        else:
+            self._context = await self._browser.new_context(
+                viewport={"width": 1280, "height": 900},
+            )
 
-        self._browser = await self._pw.chromium.launch(
-            headless=headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=SkiaGraphite",
-            ],
-        )
-        self._context = await self._browser.new_context(
-            storage_state=storage,
-            viewport={"width": 1280, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/130.0.0.0 Safari/537.36"
-            ),
-        )
-
-        for _ in range(self._pool_size):
-            page = await self._context.new_page()
-            await self._page_pool.put(page)
-
+        # One page ready; rest created on-demand up to pool_size
+        page = await self._context.new_page()
+        await self._page_pool.put(page)
+        self._pool_created = 1
         self._started = True
+        print(f"[Harness] Ready (headless, pool 1/{self._pool_size})")
 
-        # Check if already authenticated
-        if storage:
+    async def _kill_stale_chrome(self) -> None:
+        """Kill any Chrome process using our debug port."""
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{_CDP_PORT}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            pids = result.stdout.strip().split("\n")
+            for pid in pids:
+                if pid.strip():
+                    os.kill(int(pid.strip()), 9)
+                    print(f"[Harness] Killed stale Chrome process {pid.strip()}")
+            if any(p.strip() for p in pids):
+                await asyncio.sleep(1)  # Give OS time to release port
+        except Exception:
+            pass
+
+    async def stop(self) -> None:
+        """Disconnect Playwright. NEVER kill Chrome — it persists across restarts."""
+        # Close pages we created (so they don't pile up)
+        while not self._page_pool.empty():
             try:
-                test_page = await self.acquire_page()
-                await test_page.goto(GMAIL_INBOX, wait_until="domcontentloaded", timeout=15000)
-                await test_page.wait_for_timeout(3000)
-                url = test_page.url
-                if "mail.google.com" in url and "ServiceLogin" not in url:
-                    self._authenticated = True
-                    self._email = await test_page.evaluate("""
-                        () => {
-                            const el = document.querySelector('[data-email]');
-                            return el ? el.getAttribute('data-email') : '';
-                        }
-                    """) or ""
-                await self.release_page(test_page)
+                p = self._page_pool.get_nowait()
+                await p.close()
             except Exception:
                 pass
 
-    async def stop(self) -> None:
-        """Shut down browser."""
-        if self._browser:
-            await self._browser.close()
+        # Disconnect Playwright only (Chrome stays alive with session cookies)
         if self._pw:
-            await self._pw.stop()
+            try:
+                await self._pw.stop()
+            except Exception:
+                pass
+
+        # Do NOT kill Chrome — it must persist across server restarts
+        self._browser = None
+        self._context = None
+        self._pw = None
+        self._chrome_proc = None
+        self._pool_created = 0
         self._started = False
+        # Keep _authenticated — Chrome session persists
 
     # ------------------------------------------------------------------
-    # Authentication — visible browser for manual Gmail login
+    # Authentication — ensure Gmail access
     # ------------------------------------------------------------------
 
-    async def start_login(self) -> None:
-        """Open a visible Chromium window for the user to log into Gmail."""
-        if not self._pw:
-            self._pw = await async_playwright().start()
-
-        self._login_browser = await self._pw.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        self._login_context = await self._login_browser.new_context(
-            viewport={"width": 1100, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/130.0.0.0 Safari/537.36"
-            ),
-        )
-        self._login_page = await self._login_context.new_page()
-        await self._login_page.goto(GMAIL_INBOX)
-
-    async def check_login_complete(self) -> bool:
-        """Check if the user has finished logging in."""
-        if not self._login_page:
+    async def ensure_gmail_auth(self) -> bool:
+        """Quick check: does the persistent Chrome profile have Gmail cookies?
+        No visible windows, no user interaction needed. Just a headless check."""
+        if self._authenticated:
+            return True
+        if not self._started:
             return False
-        try:
-            url = self._login_page.url
-            if "mail.google.com" in url and "ServiceLogin" not in url:
-                # Save storage state
-                state = await self._login_context.storage_state()
-                STORAGE_STATE_PATH.write_text(json.dumps(state))
 
-                self._email = await self._login_page.evaluate("""
+        page = await self.acquire_page()
+        try:
+            await page.goto(GMAIL_INBOX, wait_until="domcontentloaded", timeout=20000)
+            await page.wait_for_timeout(2000)
+            url = page.url
+
+            if ("mail.google.com" in url
+                    and "ServiceLogin" not in url
+                    and "accounts.google.com" not in url
+                    and "workspace.google.com" not in url):
+                self._authenticated = True
+                self._email = await page.evaluate("""
                     () => {
                         const el = document.querySelector('[data-email]');
                         return el ? el.getAttribute('data-email') : '';
                     }
-                """) or "authenticated"
-                self._authenticated = True
-
-                # Close login browser
-                await self._login_browser.close()
-                self._login_page = None
-                self._login_browser = None
-                self._login_context = None
-
-                # Restart headless browser with saved auth
-                if self._started:
-                    await self.stop()
-                await self.start(headless=True)
-
+                """) or ""
+                print(f"[Harness] Authenticated as: {self._email}")
                 return True
-        except Exception:
-            pass
-        return False
 
-    async def finish_login(self) -> dict:
-        """Poll until the user completes Gmail login (2 min timeout)."""
-        for _ in range(120):
-            if await self.check_login_complete():
-                return {"authenticated": True, "email": self._email}
-            await asyncio.sleep(1)
-        return {"authenticated": False, "email": ""}
+            # Try clicking account chooser if available
+            if "accounts.google.com" in url:
+                try:
+                    has_accounts = await page.evaluate(
+                        "() => document.querySelectorAll('[data-identifier]').length > 0"
+                    )
+                    if has_accounts:
+                        el = await page.wait_for_selector('div[data-identifier]', timeout=2000)
+                        if el:
+                            await el.click()
+                            await page.wait_for_url("**/mail.google.com/**", timeout=15000)
+                            self._authenticated = True
+                            print("[Harness] Authenticated via account chooser")
+                            return True
+                except Exception:
+                    pass
+
+            print(f"[Harness] Not authenticated (at: {url[:60]})")
+            return False
+        except Exception as e:
+            print(f"[Harness] Auth check error: {e}")
+            return False
+        finally:
+            if page:
+                await self.release_page(page)
+
 
     # ------------------------------------------------------------------
     # Page pool
     # ------------------------------------------------------------------
 
     async def acquire_page(self) -> Page:
-        """Get a live page from the pool (blocks if none available).
-
-        If the page pulled from the pool is closed/crashed, discard it
-        and create a fresh one from the current context.
-        """
-        while True:
-            page = await asyncio.wait_for(self._page_pool.get(), timeout=120)
+        """Get a page from the pool, creating on-demand up to pool_size. Never exceeds cap."""
+        # Try to get from pool first (non-blocking)
+        while not self._page_pool.empty():
+            page = self._page_pool.get_nowait()
             try:
-                # Quick liveness check — evaluate a trivial expression
-                if page.is_closed():
-                    raise RuntimeError("page is closed")
-                await page.evaluate("1+1")
-                return page
+                if not page.is_closed():
+                    await page.evaluate("1+1")
+                    return page
             except Exception:
-                # Page is dead — create a replacement
+                self._pool_created = max(0, self._pool_created - 1)
                 try:
-                    if self._context:
-                        new_page = await self._context.new_page()
-                        return new_page
+                    await page.close()
                 except Exception:
                     pass
-                # If context is also dead, try to restart
-                if self._context is None or self._browser is None:
-                    await self.stop()
-                    await self.start(headless=True)
-                    page = await asyncio.wait_for(self._page_pool.get(), timeout=120)
-                    return page
+
+        # Pool empty — create a new page if under cap
+        if self._pool_created < self._pool_size and self._context:
+            new_page = await self._context.new_page()
+            self._pool_created += 1
+            return new_page
+
+        # At cap — wait for a page to be released
+        page = await asyncio.wait_for(self._page_pool.get(), timeout=120)
+        try:
+            if not page.is_closed():
+                await page.evaluate("1+1")
+                return page
+        except Exception:
+            self._pool_created = max(0, self._pool_created - 1)
+
+        # Last resort — create replacement if one died
+        if self._context:
+            new_page = await self._context.new_page()
+            self._pool_created += 1
+            return new_page
+        raise RuntimeError("No browser context available")
 
     async def release_page(self, page: Page) -> None:
-        """Return a page to the pool. If the page is dead, replace it."""
+        """Return a page to the pool. Navigate to about:blank to free memory."""
         try:
             if page.is_closed():
-                raise RuntimeError("page is closed")
+                self._pool_created = max(0, self._pool_created - 1)
+                return
             await page.goto("about:blank", timeout=5000)
             await self._page_pool.put(page)
         except Exception:
-            # Page is dead — create a replacement if context is alive
+            self._pool_created = max(0, self._pool_created - 1)
             try:
-                if self._context:
-                    new_page = await self._context.new_page()
-                    await self._page_pool.put(new_page)
+                await page.close()
             except Exception:
-                pass  # Pool shrinks by 1; will be replenished on next start
+                pass
 
     # ------------------------------------------------------------------
     # Screenshot helpers
     # ------------------------------------------------------------------
 
     async def save_screenshot(self, page: Page, job_id: str, step: str) -> str:
-        """Take a screenshot, save to disk, return the URL path."""
         filename = f"{job_id}_{step}_{int(time.time() * 1000)}.png"
         filepath = SCREENSHOTS_DIR / filename
         await page.screenshot(path=str(filepath), full_page=False)
         return f"/screenshots/{filename}"
 
     def save_screenshot_b64(self, b64_data: str, job_id: str, step: str) -> str:
-        """Save a base64 screenshot to disk, return the URL path."""
         import base64 as b64mod
         filename = f"{job_id}_{step}_{int(time.time() * 1000)}.png"
         filepath = SCREENSHOTS_DIR / filename
         filepath.write_bytes(b64mod.b64decode(b64_data))
         return f"/screenshots/{filename}"
-
-    # ------------------------------------------------------------------
-    # Inbox thread listing (uses JS extraction — simple and reliable)
-    # ------------------------------------------------------------------
-
-    async def fetch_thread_list(self, max_results: int = 100) -> list[dict]:
-        """Navigate to Gmail inbox and extract thread list via JS."""
-        print(f"[Harness] fetch_thread_list called, started={self._started}, authenticated={self._authenticated}")
-        page = await self.acquire_page()
-        try:
-            await page.goto(GMAIL_INBOX, wait_until="domcontentloaded", timeout=20000)
-            url = page.url
-            print(f"[Harness] Navigated to: {url}")
-            await page.wait_for_selector("tr.zA", timeout=15000)
-            await page.wait_for_timeout(2000)
-            print("[Harness] Found tr.zA rows, extracting...")
-
-            threads = await page.evaluate("""
-                () => {
-                    const rows = document.querySelectorAll('tr.zA');
-                    const threads = [];
-                    const seen = new Set();
-                    for (const row of rows) {
-                        // Thread ID: span.bqe has data-thread-id like "#thread-f:NUMBER"
-                        const threadSpan = row.querySelector('span.bqe[data-thread-id]');
-                        const rawId = threadSpan ? threadSpan.getAttribute('data-thread-id') : '';
-                        const match = rawId.match(/thread-f:(\\d+)/);
-                        const threadId = match ? match[1] : '';
-                        if (!threadId || seen.has(threadId)) continue;
-                        seen.add(threadId);
-
-                        // Subject: span.bog
-                        const subjectEl = row.querySelector('span.bog');
-                        const subject = subjectEl ? subjectEl.textContent.trim() : '(no subject)';
-
-                        // Sender: span.zF
-                        const senderEl = row.querySelector('span.zF');
-                        const sender = senderEl ? senderEl.textContent.trim() : '';
-
-                        // Snippet: span.y2
-                        const snippetEl = row.querySelector('span.y2');
-                        const snippet = snippetEl ? snippetEl.textContent.trim() : '';
-
-                        threads.push({ id: threadId, subject, snippet, sender });
-                    }
-                    return threads;
-                }
-            """)
-            print(f"[Harness] Extracted {len(threads)} threads")
-            return threads[:max_results]
-        except Exception as e:
-            print(f"[Harness] fetch_thread_list ERROR: {type(e).__name__}: {e}")
-            url = page.url
-            print(f"[Harness] Current URL at error: {url}")
-            return []
-        finally:
-            await self.release_page(page)
 
 
 # ---------------------------------------------------------------------------

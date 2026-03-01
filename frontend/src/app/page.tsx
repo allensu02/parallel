@@ -43,6 +43,7 @@ function DashboardInner() {
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [draftTokens, setDraftTokens] = useState<Map<string, string>>(new Map());
+  const [frameData, setFrameData] = useState<Map<string, string>>(new Map());
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const contentCacheRef = useRef<Record<string, ThreadContent>>({});
   const [authToast, setAuthToast] = useState<string | null>(null);
@@ -115,11 +116,23 @@ function DashboardInner() {
         });
       }
 
+      if (event === "job.frame") {
+        const jobId = data.job_id as string;
+        const frame = data.frame as string;
+        setFrameData((prev) => {
+          const next = new Map(prev);
+          next.set(jobId, frame);
+          return next;
+        });
+        return; // Don't process frame events as job updates
+      }
+
       if (
         event.startsWith("job.") &&
         event !== "job.draft_token" &&
         event !== "job.question" &&
-        event !== "job.screenshot"
+        event !== "job.screenshot" &&
+        event !== "job.visual_step"
       ) {
         const jobId = data.job_id as string;
         setJobs((prev) => {
@@ -170,6 +183,7 @@ function DashboardInner() {
     setActiveRun(run);
     setJobs([]);
     setDraftTokens(new Map());
+    setFrameData(new Map());
     setChatMessages([]);
     contentCacheRef.current = { ...contentCacheRef.current, ...cache };
     setRuns((prev) => [run, ...prev]);
@@ -207,6 +221,7 @@ function DashboardInner() {
     setActiveRun(null);
     setJobs([]);
     setDraftTokens(new Map());
+    setFrameData(new Map());
     setChatMessages([]);
   };
 
@@ -362,6 +377,7 @@ function DashboardInner() {
               jobs={jobs}
               runId={activeRun.id}
               draftTokens={draftTokens}
+              frameData={frameData}
               contentCache={contentCacheRef.current}
               onJobUpdated={handleJobUpdated}
             />

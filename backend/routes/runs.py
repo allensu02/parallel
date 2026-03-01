@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from backend import database as db
 from backend.models import RunCreate, RunOut, JobOut, StepOut, QuestionOut, AnswerIn, ApproveIn
 from backend.agent.engine import start_run, notify_answer, notify_approval, cancel_run
+from backend.agent.screencast import set_visible_jobs
 
 router = APIRouter()
 
@@ -69,6 +70,23 @@ async def cancel_run_endpoint(run_id: str):
 
     await db.update_run(run_id, status="cancelled", finished_at=datetime.now(timezone.utc).isoformat())
     return {"status": "cancelled", "cancelled_jobs": cancelled_count}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/runs/{run_id}/visible — update which jobs should stream frames
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel as _BaseModel
+
+
+class VisibleJobsIn(_BaseModel):
+    job_ids: list[str]
+
+
+@router.post("/{run_id}/visible")
+async def set_visible(run_id: str, body: VisibleJobsIn):
+    await set_visible_jobs(run_id, body.job_ids)
+    return {"status": "ok", "visible_count": len(body.job_ids)}
 
 
 # ---------------------------------------------------------------------------

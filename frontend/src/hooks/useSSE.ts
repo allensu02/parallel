@@ -49,6 +49,7 @@ export function useSSE(url: string | null, onMessage: SSEHandler) {
         "job.completed", "job.failed", "job.skipped", "job.retrying",
         "job.draft_token", "job.draft_complete", "job.pending_approval",
         "job.question", "job.screenshot",
+        "job.frame", "job.visual_step",
         "step.started", "step.completed", "step.failed",
         "keepalive",
       ];

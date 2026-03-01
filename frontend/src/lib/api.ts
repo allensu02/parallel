@@ -168,6 +168,13 @@ export async function cancelRun(runId: string): Promise<{ status: string; cancel
   });
 }
 
+export async function setVisibleJobs(runId: string, jobIds: string[]): Promise<void> {
+  await fetchAPI(`/api/runs/${runId}/visible`, {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+}
+
 export async function listJobs(runId: string): Promise<Job[]> {
   return fetchAPI<Job[]>(`/api/runs/${runId}/jobs`);
 }

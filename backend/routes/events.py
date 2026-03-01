@@ -45,7 +45,7 @@ async def publish_global(event: str, data: dict[str, Any]) -> None:
 
 @router.get("/{run_id}")
 async def event_stream(run_id: str):
-    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=2000)  # Larger for frame events
     subs = _get_subs(run_id)
     subs.append(queue)
 

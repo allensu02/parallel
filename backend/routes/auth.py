@@ -144,22 +144,11 @@ async def auth_login_post():
         )
         return {"status": "redirect", "auth_url": auth_url}
     else:
-        from backend.agent.browser_harness import harness
-        await harness.start_login()
-        asyncio.create_task(_wait_for_playwright_login())
+        # No visible browser login — direct to OAuth
         return {
-            "status": "login_started",
-            "message": "A browser window has opened. Please log into Gmail.",
+            "status": "error",
+            "message": "Please use Google OAuth to sign in.",
         }
-
-
-async def _wait_for_playwright_login():
-    from backend.agent.browser_harness import harness
-    result = await harness.finish_login()
-    if result["authenticated"]:
-        print(f"[Auth] Gmail login successful: {result['email']}")
-    else:
-        print("[Auth] Gmail login timed out or failed")
 
 
 # ---------------------------------------------------------------------------

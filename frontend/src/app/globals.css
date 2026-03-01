@@ -61,6 +61,56 @@ body {
   animation: honey-pulse 1.5s ease-in-out infinite;
 }
 
+/* ── Hex hive spotlight system ── */
+
+/* Ambient idle pulse — barely perceptible, keeps UI alive */
+@keyframes hive-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.002); }
+}
+
+.hive-ambient {
+  animation: hive-breathe 5s ease-in-out infinite;
+}
+
+/*
+ * Global spotlight — a single warm radial gradient centered on the viewport.
+ * This replaces per-hex box-shadows (which create ugly rectangles on clipped hexes).
+ * The spotlight is fixed to the viewport, so the center hex is always lit.
+ */
+.hive-spotlight {
+  pointer-events: none;
+  background:
+    /* Warm honey bloom at center */
+    radial-gradient(
+      ellipse 40% 40% at 50% 50%,
+      rgba(240, 192, 64, 0.06) 0%,
+      rgba(212, 162, 78, 0.03) 40%,
+      transparent 70%
+    ),
+    /* Dark vignette at edges */
+    radial-gradient(
+      ellipse 65% 65% at 50% 50%,
+      transparent 0%,
+      rgba(20, 16, 10, 0.10) 40%,
+      rgba(20, 16, 10, 0.45) 65%,
+      rgba(14, 11, 7, 0.82) 100%
+    );
+}
+
+/* Camera container — NO CSS transition; rAF handles smooth interpolation */
+.hive-camera {
+  will-change: transform;
+}
+
+/* Hex cell transitions — smooth role changes as camera glides */
+.hex-transition {
+  transition:
+    opacity 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    transform 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    filter 350ms ease;
+}
+
 /* ── Hexagonal card (pointy-top) ── */
 .hex-card {
   clip-path: polygon(
