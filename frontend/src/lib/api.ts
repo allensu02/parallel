@@ -52,6 +52,7 @@ export interface Job {
   pipeline_type: PipelineType;
   task_instruction: string;
   live_view_url: string;
+  artifacts: string; // JSON-encoded list of artifact objects
 }
 
 export interface TaskInput {
@@ -306,4 +307,44 @@ export async function getCalendarAvailability(
 
 export function getScreenshotUrl(path: string): string {
   return `${API_BASE}${path}`;
+}
+
+// ---------------------------------------------------------------------------
+// Task Demos (recorded browser workflows)
+// ---------------------------------------------------------------------------
+
+export interface TaskDemo {
+  id: string;
+  name: string;
+  instruction_summary: string;
+  created_at: string;
+}
+
+export async function startDemoRecording(): Promise<{
+  session_id: string;
+  live_view_url: string;
+}> {
+  return fetchAPI("/api/demo/start", { method: "POST" });
+}
+
+export async function stopDemoRecording(
+  sessionId: string,
+  name: string
+): Promise<TaskDemo> {
+  return fetchAPI<TaskDemo>("/api/demo/stop", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, name }),
+  });
+}
+
+export async function listDemos(): Promise<TaskDemo[]> {
+  return fetchAPI<TaskDemo[]>("/api/demo/list");
+}
+
+export async function getDemo(demoId: string): Promise<TaskDemo> {
+  return fetchAPI<TaskDemo>(`/api/demo/${demoId}`);
+}
+
+export async function deleteDemo(demoId: string): Promise<{ deleted: boolean; id: string }> {
+  return fetchAPI(`/api/demo/${demoId}`, { method: "DELETE" });
 }

@@ -53,10 +53,10 @@ export default function StatsBar({ run }: StatsBarProps) {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="space-y-3 relative"
+      className="glass-panel p-4 space-y-3"
     >
       {/* Golden progress bar — thick, vibrant, showy */}
-      <div className="h-3 rounded-full bg-surface-2 overflow-hidden border border-honey/15 shadow-inner">
+      <div className="h-2.5 rounded-full bg-surface-2/60 overflow-hidden border border-honey/15 shadow-inner">
         <motion.div
           initial={{ width: 0 }}
           animate={{ width: `${progress}%` }}
@@ -68,7 +68,7 @@ export default function StatsBar({ run }: StatsBarProps) {
             <motion.div
               animate={{ x: ["-100%", "200%"] }}
               transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-              className="w-1/3 h-full bg-gradient-to-r from-transparent via-white/35 to-transparent skew-x-12"
+              className="w-1/3 h-full bg-gradient-to-r from-transparent via-white/30 to-transparent skew-x-12"
             />
           </div>
         </motion.div>

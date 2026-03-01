@@ -36,12 +36,6 @@ function jobLabel(job: Job): string {
   return job.task_instruction || job.subject || "Task";
 }
 
-/** Whether this job uses a local Playwright browser (screencast frames). */
-function usesLocalBrowser(job: Job): boolean {
-  const local = ["gmail", "slides", "sheets", "docs", "forms", "drive"];
-  return local.includes(job.pipeline_type || "gmail");
-}
-
 /** Whether this job is a gmail-type job with email context. */
 function isGmailJob(job: Job): boolean {
   return (job.pipeline_type || "gmail") === "gmail";
@@ -58,6 +52,7 @@ interface LiveDraftPanelProps {
   frameData: Map<string, string>;
   contentCache?: Record<string, ThreadContent>;
   onJobUpdated?: (jobId: string, updates: Partial<Job>) => void;
+  fullscreen?: boolean;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -87,16 +82,6 @@ function statusLabel(job: Job): { text: string; icon: React.ReactNode; color: st
    ═══════════════════════════════════════════════════════════════════════════ */
 
 interface Axial { q: number; r: number }
-
-/** 6 neighbor offsets in axial coords (flat-top hex). */
-const _HEX_DIRS: Axial[] = [
-  { q: 0, r: -1 },   // 0: N   (up)
-  { q: 1, r: -1 },   // 1: NE  (upper-right)
-  { q: 1, r: 0 },    // 2: SE  (lower-right)
-  { q: 0, r: 1 },    // 3: S   (down)
-  { q: -1, r: 1 },   // 4: SW  (lower-left)
-  { q: -1, r: 0 },   // 5: NW  (upper-left)
-];
 
 /** Axial → pixel position for flat-top hex layout. */
 function axialToPixel(q: number, r: number, size: number): { x: number; y: number } {
@@ -150,6 +135,93 @@ function pixelToNearestAxial(px: number, py: number, size: number): Axial {
   if (dq > dr && dq > ds) rq = -rr - rs;
   else if (dr > ds) rr = -rq - rs;
   return { q: rq, r: rr };
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Idle floating bees — ambient hexagons drifting around
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const IDLE_BEE_COUNT = 14;
+
+interface IdleBeeData {
+  x: number;      // % position
+  y: number;      // % position
+  size: number;   // px (half-width of the hex)
+  opacity: number;
+  delay: number;  // animation-delay in seconds
+}
+
+function IdleBees() {
+  const [bees, setBees] = useState<IdleBeeData[]>([]);
+
+  // Generate bee positions client-side only to avoid hydration mismatch
+  useEffect(() => {
+    const generated: IdleBeeData[] = [];
+    for (let i = 0; i < IDLE_BEE_COUNT; i++) {
+      generated.push({
+        x: Math.random() * 84 + 8,
+        y: Math.random() * 84 + 8,
+        size: 36 + Math.random() * 30, // 36-66px half-width → 72-132px full hex
+        opacity: 0.35 + Math.random() * 0.3,
+        delay: Math.random() * 12,
+      });
+    }
+    setBees(generated);
+  }, []);
+
+  if (bees.length === 0) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden z-[1]">
+      {bees.map((bee, i) => {
+        const w = bee.size * 2;
+        const h = bee.size * Math.sqrt(3);
+        return (
+          <div
+            key={i}
+            className="idle-bee-wrapper"
+            style={{
+              position: "absolute",
+              left: `${bee.x}%`,
+              top: `${bee.y}%`,
+              width: w,
+              height: h,
+              opacity: bee.opacity,
+              animationDelay: `${bee.delay}s`,
+            }}
+          >
+            {/* Outer hex border — same as worker bees */}
+            <div
+              className="absolute inset-0 hex-cell"
+              style={{
+                width: w,
+                height: h,
+                backgroundColor: "rgba(212, 148, 10, 0.30)",
+              }}
+            />
+            {/* Inner hex surface — same as worker bees */}
+            <div
+              className="absolute hex-cell flex items-center justify-center"
+              style={{
+                width: w - 4,
+                height: h - 4,
+                left: 2,
+                top: 2,
+                backgroundColor: "rgba(45, 33, 17, 0.6)",
+              }}
+            >
+              <Hexagon
+                className="text-honey/20"
+                style={{ width: bee.size * 0.4, height: bee.size * 0.4 }}
+                strokeWidth={1.5}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 
@@ -224,10 +296,10 @@ function ExpandedBrowserView({
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.92, opacity: 0 }}
         transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="rounded-xl border border-border bg-surface overflow-hidden hover-glow max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl"
+        className="glass-panel overflow-hidden hover-glow max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl"
       >
         {/* Header */}
-        <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between bg-surface-2 sticky top-0 z-10">
+        <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between bg-surface-2/60 sticky top-0 z-10">
           <div className="flex items-center gap-2 text-sm font-medium truncate flex-1 mr-2">
             <Hexagon className="w-3.5 h-3.5 text-primary flex-shrink-0" />
             <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${pipelineBadgeClass(pipelineType)}`}>{pipelineType}</span>
@@ -289,32 +361,32 @@ function ExpandedBrowserView({
 
         {/* Email context (gmail only) */}
         {isGmail && (
-          <div className="border-t border-border/30">
-            <button onClick={() => { if (!showContext && !contextData) loadContext(); setShowContext(!showContext); }} className="w-full flex items-center gap-1.5 px-4 py-2 text-xs text-muted hover:text-primary transition-colors">
-              <Mail className="w-3.5 h-3.5" /><span>Original email</span>
-              {showContext ? <ChevronDown className="w-3.5 h-3.5 ml-auto" /> : <ChevronRight className="w-3.5 h-3.5 ml-auto" />}
-            </button>
-            <AnimatePresence>
-              {showContext && (
-                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.12 }} className="overflow-hidden">
-                  <div className="px-4 pb-3">
-                    {contextLoading ? (
-                      <div className="flex items-center gap-1.5 text-xs text-muted py-2"><Loader2 className="w-3 h-3 animate-spin text-primary" /> Loading...</div>
-                    ) : contextData ? (
-                      <div className="max-h-[160px] overflow-y-auto rounded-lg bg-surface-2 border border-border/50 p-3 space-y-2">
-                        {contextData.messages.map((msg: { from: string; date: string; body: string }, i: number) => (
-                          <div key={i} className="text-xs">
-                            <div className="font-medium text-foreground/80 mb-0.5">{msg.from} <span className="text-muted font-normal ml-1">{msg.date}</span></div>
-                            <div className="text-muted whitespace-pre-wrap leading-relaxed">{msg.body.slice(0, 500)}{msg.body.length > 500 && "..."}</div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : <div className="text-xs text-muted">Could not load content</div>}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+        <div className="border-t border-border/30">
+          <button onClick={() => { if (!showContext && !contextData) loadContext(); setShowContext(!showContext); }} className="w-full flex items-center gap-1.5 px-4 py-2 text-xs text-muted hover:text-primary transition-colors">
+            <Mail className="w-3.5 h-3.5" /><span>Original email</span>
+            {showContext ? <ChevronDown className="w-3.5 h-3.5 ml-auto" /> : <ChevronRight className="w-3.5 h-3.5 ml-auto" />}
+          </button>
+          <AnimatePresence>
+            {showContext && (
+              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.12 }} className="overflow-hidden">
+                <div className="px-4 pb-3">
+                  {contextLoading ? (
+                    <div className="flex items-center gap-1.5 text-xs text-muted py-2"><Loader2 className="w-3 h-3 animate-spin text-primary" /> Loading...</div>
+                  ) : contextData ? (
+                    <div className="max-h-[160px] overflow-y-auto rounded-lg bg-surface-2 border border-border/50 p-3 space-y-2">
+                      {contextData.messages.map((msg: { from: string; date: string; body: string }, i: number) => (
+                        <div key={i} className="text-xs">
+                          <div className="font-medium text-foreground/80 mb-0.5">{msg.from} <span className="text-muted font-normal ml-1">{msg.date}</span></div>
+                          <div className="text-muted whitespace-pre-wrap leading-relaxed">{msg.body.slice(0, 500)}{msg.body.length > 500 && "..."}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="text-xs text-muted">Could not load content</div>}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
         )}
 
         {/* Task description (non-gmail) */}
@@ -327,7 +399,7 @@ function ExpandedBrowserView({
 
         {/* Approval buttons */}
         {isPending && (
-          <div className="px-4 py-2.5 border-t border-border/50 flex items-center gap-2 bg-surface-2">
+          <div className="px-4 py-2.5 border-t border-border/50 flex items-center gap-2 bg-surface-2/60">
             {editing ? (
               <>
                 <button onClick={handleApprove} disabled={approving} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors border border-success/20"><Check className="w-3 h-3" /> Save</button>
@@ -357,8 +429,7 @@ function ExpandedBrowserView({
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Individual hex cell — uniform styling, spotlight overlay creates hierarchy
-   With fly-away animation for completed tasks
+   Individual hex cell — with sinusoidal bee-like flight paths
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /** Track previous status to detect completion transitions */
@@ -370,6 +441,36 @@ function usePrevious<T>(value: T): T | undefined {
 
 const DONE_STATUSES = ["completed", "skipped", "failed"];
 
+/** Generate sinusoidal waypoints for bee-like flight — smooth, round curves */
+function generateSineWaypoints(
+  startX: number, startY: number,
+  endX: number, endY: number,
+  steps: number,
+  wobbleAmplitude: number
+): { x: number[]; y: number[] } {
+  const xKeys: number[] = [startX];
+  const yKeys: number[] = [startY];
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const angle = Math.atan2(dy, dx);
+  const perpX = -Math.sin(angle);
+  const perpY = Math.cos(angle);
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    // Ease the progress so movement starts slow, peaks in middle, slows at end
+    const easedT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    const linearX = startX + dx * easedT;
+    const linearY = startY + dy * easedT;
+    // Smooth sine wobble — 2.5 full waves, strongest in the middle of the path
+    const wobbleEnvelope = Math.sin(t * Math.PI); // peaks at t=0.5
+    const wobble = Math.sin(t * Math.PI * 2.5) * wobbleAmplitude * wobbleEnvelope;
+    xKeys.push(linearX + wobble * perpX);
+    yKeys.push(linearY + wobble * perpY);
+  }
+  return { x: xKeys, y: yKeys };
+}
+
 function HexCell({
   job, size, onClick, streamText, frame, onFlyAway,
 }: {
@@ -379,6 +480,7 @@ function HexCell({
 }) {
   const prevStatus = usePrevious(job.status);
   const [flyingAway, setFlyingAway] = useState(false);
+  const [hasArrived, setHasArrived] = useState(false);
 
   // Detect transition TO a done status — trigger fly-away
   useEffect(() => {
@@ -387,18 +489,17 @@ function HexCell({
       !DONE_STATUSES.includes(prevStatus) &&
       DONE_STATUSES.includes(job.status)
     ) {
-      // Brief flash of final state, then dramatic fly-away
       const timer = setTimeout(() => {
         setFlyingAway(true);
-        // After fly-away animation completes (1.4s), notify parent to remove from grid
-        setTimeout(() => onFlyAway?.(job.id), 1500);
+        // Wait for the full slow fly-out before removing from grid
+        setTimeout(() => onFlyAway?.(job.id), 5000);
       }, 1200);
       return () => clearTimeout(timer);
     }
   }, [job.status, prevStatus, job.id, onFlyAway]);
+
   const { text: statusText, icon: statusIcon, color: statusColor } = statusLabel(job);
   const isDrafting = job.current_step === "generate_draft" && job.status === "running";
-  const isVisualCompose = job.current_step === "visual_compose";
   const isPending = job.status === "pending_approval";
   const hasFrame = !!frame;
   const pipelineType = job.pipeline_type || "gmail";
@@ -410,75 +511,112 @@ function HexCell({
   const h = size * Math.sqrt(3);
   const label = jobLabel(job);
 
-  // ── Dramatic fly-away (upward, big arc) ──
-  const flyAngle = useRef((Math.random() - 0.5) * 100); // -50° to +50°
-  const flyDistance = useRef(800 + Math.random() * 600);  // 800–1400px away
-  const flyX = Math.sin(flyAngle.current * Math.PI / 180) * flyDistance.current;
-  const flyY = -(flyDistance.current * 0.8 + Math.random() * 300);
-  const flyRotation = useRef((Math.random() - 0.5) * 720); // up to ±360° spin
+  // ALL random values in a single ref — computed once on mount, stable across re-renders
+  const rand = useRef({
+    flyAngle: (Math.random() - 0.5) * 120,       // wider spread for exit direction
+    flyDist: 600 + Math.random() * 400,           // moderate exit distance
+    flyRot: (Math.random() - 0.5) * 180,          // gentle rotation on exit
+    entryAngle: Math.random() * Math.PI * 2,
+    entryDist: 500 + Math.random() * 400,
+    entryRot: (Math.random() - 0.5) * 90,
+    entryDelay: 0.1 + Math.random() * 0.5,
+    exitWobble: 50 + Math.random() * 40,          // per-bee wobble amplitude on exit
+  });
 
-  // ── Dramatic fly-in (from far offscreen below/sides) ──
-  const entryDirection = useRef(Math.random()); // 0-1: picks random cardinal-ish direction
-  const entryDistance = useRef(600 + Math.random() * 500); // 600–1100px
-  const entryAngleRad = useRef(
-    entryDirection.current < 0.3 ? Math.PI * 0.5 + (Math.random() - 0.5) * 0.8  // from below
-    : entryDirection.current < 0.6 ? (Math.random() - 0.5) * 1.2  // from above-ish
-    : entryDirection.current < 0.8 ? Math.PI * 0.25 + Math.random() * 0.5  // from bottom-right
-    : Math.PI * 0.75 + Math.random() * 0.5  // from bottom-left
+  // Stable entry position (computed once from ref)
+  const entryX = useRef(Math.cos(rand.current.entryAngle) * rand.current.entryDist);
+  const entryY = useRef(Math.sin(rand.current.entryAngle) * rand.current.entryDist);
+
+  // Stable exit: pick a random direction (any angle), drift gently outward
+  const exitAngleRad = useRef(rand.current.flyAngle * Math.PI / 180);
+  const exitX = useRef(Math.sin(exitAngleRad.current) * rand.current.flyDist);
+  const exitY = useRef(-Math.cos(exitAngleRad.current) * rand.current.flyDist);
+
+  // Stable fly-IN waypoints — curvy entry path (from random edge to center)
+  const flyInWaypoints = useRef(
+    generateSineWaypoints(entryX.current, entryY.current, 0, 0, 12, 35 + Math.random() * 25)
   );
-  const entryX = Math.cos(entryAngleRad.current) * entryDistance.current * (Math.random() > 0.5 ? 1 : -1);
-  const entryY = Math.sin(entryAngleRad.current) * entryDistance.current;
-  const entryRotation = useRef((Math.random() - 0.5) * 180);
-  const entryDelay = useRef(Math.random() * 0.4);
+  const flyInTimes = useRef(
+    Array.from({ length: 13 }, (_, i) => i / 12)
+  );
+
+  // Stable fly-OUT waypoints — 14 steps for very smooth curvy path
+  const flyOutWaypoints = useRef(
+    generateSineWaypoints(0, 0, exitX.current, exitY.current, 14, rand.current.exitWobble)
+  );
+
+  const flyOutTimes = useRef(
+    Array.from({ length: 15 }, (_, i) => i / 14)
+  );
+
+  // Mark as arrived once the entry transition completes
+  const handleAnimComplete = useCallback(() => {
+    if (!flyingAway && !hasArrived) setHasArrived(true);
+  }, [flyingAway, hasArrived]);
 
   return (
     <motion.div
+      layout={false}
       initial={{
-        x: entryX,
-        y: entryY,
-        scale: 0.1,
+        x: entryX.current,
+        y: entryY.current,
+        scale: 0.15,
         opacity: 0,
-        rotate: entryRotation.current,
+        rotate: rand.current.entryRot,
       }}
       animate={flyingAway ? {
-        x: flyX,
-        y: flyY,
-        scale: 0.1,
-        opacity: 0,
-        rotate: flyRotation.current,
-      } : {
+        // Fly-out: slow, curvy departure with gentle fade
+        x: flyOutWaypoints.current.x,
+        y: flyOutWaypoints.current.y,
+        scale: [1, 1.02, 1.0, 0.97, 0.93, 0.88, 0.82, 0.74, 0.64, 0.52, 0.40, 0.28, 0.15, 0.06, 0],
+        opacity: [1, 1, 1, 1, 0.98, 0.95, 0.9, 0.82, 0.7, 0.55, 0.4, 0.25, 0.12, 0.04, 0],
+        rotate: rand.current.flyRot,
+      } : hasArrived ? {
+        // Resting state — stationary
         x: 0,
         y: 0,
         scale: 1,
         opacity: 1,
         rotate: 0,
+      } : {
+        // Fly-in: curvy sinusoidal entry path
+        x: flyInWaypoints.current.x,
+        y: flyInWaypoints.current.y,
+        scale: [0.15, 0.25, 0.40, 0.55, 0.68, 0.78, 0.86, 0.92, 0.96, 0.98, 0.99, 1.0, 1.0],
+        opacity: [0, 0.15, 0.35, 0.55, 0.70, 0.80, 0.88, 0.93, 0.96, 0.98, 0.99, 1.0, 1.0],
+        rotate: [rand.current.entryRot, ...Array.from({ length: 12 }, (_, i) => rand.current.entryRot * (1 - (i + 1) / 12))],
       }}
       exit={{
-        x: flyX,
-        y: flyY,
-        scale: 0.1,
-        opacity: 0,
-        rotate: flyRotation.current,
+        x: flyOutWaypoints.current.x,
+        y: flyOutWaypoints.current.y,
+        scale: [1, 1.0, 0.95, 0.88, 0.78, 0.65, 0.50, 0.35, 0.22, 0.12, 0.05, 0.02, 0.01, 0, 0],
+        opacity: [1, 1, 0.95, 0.88, 0.78, 0.65, 0.50, 0.35, 0.22, 0.12, 0.05, 0.02, 0, 0, 0],
+        rotate: rand.current.flyRot,
       }}
       transition={flyingAway ? {
-        duration: 1.4,
-        ease: [0.22, 0, 0.36, 0],
+        duration: 4.5,           // Very slow, leisurely fly-out
+        times: flyOutTimes.current,
+        ease: [0.25, 0.0, 0.35, 1.0],
+      } : hasArrived ? {
+        type: "tween",
+        duration: 0.4,
+        ease: [0.25, 0.1, 0.25, 1.0],
       } : {
-        type: "spring",
-        stiffness: 60,
-        damping: 10,
-        mass: 1.2,
-        delay: entryDelay.current,
+        duration: 2.5,            // Slow, graceful fly-in
+        times: flyInTimes.current,
+        ease: [0.25, 0.0, 0.35, 1.0],
+        delay: rand.current.entryDelay,
       }}
+      onAnimationComplete={handleAnimComplete}
       onClick={onClick}
-      className={`cursor-pointer group ${flyingAway ? "bee-fly-away" : "bee-fly-in"}`}
+      className={`cursor-pointer group ${flyingAway ? "bee-fly-away" : hasArrived ? "" : "bee-fly-in"}`}
       style={{
         position: "relative",
         width: w,
         height: h,
       }}
     >
-      {/* Outer hex (border) — bright golden */}
+      {/* Outer hex (border) — amber honey tones */}
       <div
         className={`absolute inset-0 hex-cell transition-all duration-300 group-hover:brightness-130 ${
           job.status === "running" ? "animate-honey-glow" : ""
@@ -487,12 +625,12 @@ function HexCell({
           width: w,
           height: h,
           backgroundColor: job.status === "running"
-            ? "rgba(255, 224, 102, 0.55)"
+            ? "rgba(232, 163, 23, 0.55)"
             : job.status === "completed"
             ? "rgba(160, 217, 17, 0.45)"
             : job.status === "failed"
             ? "rgba(255, 82, 82, 0.35)"
-            : "rgba(255, 184, 0, 0.35)",
+            : "rgba(212, 148, 10, 0.35)",
         }}
       />
       {/* Inner hex (content) */}
@@ -593,11 +731,10 @@ function HiveMinimap({
 
   const clampedW = Math.min(w, 120);
   const clampedH = Math.min(h, 80);
-  const scale = Math.min(clampedW / w, clampedH / h, 1);
 
   return (
     <div
-      className="absolute bottom-3 right-3 bg-surface/85 backdrop-blur-md border border-honey/20 rounded-lg overflow-hidden z-30 shadow-lg shadow-honey/10"
+      className="absolute bottom-3 right-3 glass-panel overflow-hidden z-30 shadow-lg shadow-honey/10"
       style={{ width: clampedW + 8, height: clampedH + 8 }}
     >
       <svg
@@ -613,11 +750,11 @@ function HiveMinimap({
           const dist = hexDistance(pos, centerAxial);
           const isVisible = dist <= 1;
 
-          let fill = "#5a4828";
+          let fill = "#6b5530";
           if (pos.status === "completed") fill = "#a0d911";
           else if (pos.status === "failed") fill = "#ff5252";
-          else if (pos.status === "running") fill = "#ffe066";
-          else if (pos.status === "pending_approval") fill = "#ffab00";
+          else if (pos.status === "running") fill = "#e8a317";
+          else if (pos.status === "pending_approval") fill = "#e8a317";
 
           return (
             <circle
@@ -627,7 +764,7 @@ function HiveMinimap({
               r={isCurrent ? 3.5 : isVisible ? 2.5 : 2}
               fill={fill}
               opacity={isVisible ? 1 : 0.5}
-              stroke={isCurrent ? "#ffe066" : "none"}
+              stroke={isCurrent ? "#e8a317" : "none"}
               strokeWidth={isCurrent ? 1.5 : 0}
               className="cursor-pointer"
               onClick={() => onJump(pos.q, pos.r)}
@@ -641,11 +778,11 @@ function HiveMinimap({
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Main panel — Smooth continuous scrolling, fixed warm spotlight
+   Main panel — Full-screen hive background with smooth scrolling
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export default function LiveDraftPanel({
-  jobs, runId, draftTokens, frameData, contentCache, onJobUpdated,
+  jobs, runId, draftTokens, frameData, contentCache, onJobUpdated, fullscreen,
 }: LiveDraftPanelProps) {
   // ── State ──
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -655,7 +792,8 @@ export default function LiveDraftPanel({
   const visibleReportedRef = useRef<string>("");
 
   // Camera position in world-space pixels — continuously updated via rAF
-  const cameraRef = useRef({ x: 0, y: 0 });
+  // Start offset upward so the hex center is in the lower visible area (below floating UI)
+  const cameraRef = useRef({ x: 0, y: fullscreen ? -120 : 0 });
   const cameraVelRef = useRef({ vx: 0, vy: 0 });
   // For spring-based smooth-scroll-to-target
   const cameraTargetRef = useRef<{ x: number; y: number } | null>(null);
@@ -679,21 +817,62 @@ export default function LiveDraftPanel({
   // Track which jobs have flown away (so they remain hidden until filter changes)
   const [flownAway, setFlownAway] = useState<Set<string>>(new Set());
 
+  // ── Stable position map: jobId → Axial (persists across re-renders) ──
+  const stablePositionMap = useRef<Map<string, Axial>>(new Map());
+  // Track vacant positions left by flown-away bees (for gap-filling)
+  const vacantPositions = useRef<Axial[]>([]);
+  // Version counter — incremented when positions change (gap-fills) to force recompute
+  const [positionVersion, setPositionVersion] = useState(0);
+
   const handleFlyAway = useCallback((jobId: string) => {
+    // Record the vacant position before removing from stable map
+    const pos = stablePositionMap.current.get(jobId);
+    if (pos) {
+      stablePositionMap.current.delete(jobId);
+    }
+
     setFlownAway(prev => {
       const next = new Set(prev);
       next.add(jobId);
       return next;
     });
+
+    // After a delay (let the fly-out play out a bit), find the outermost bee to fill the gap
+    if (pos) {
+      setTimeout(() => {
+        // Find the outermost occupied bee (furthest from center)
+        let outermostId: string | null = null;
+        let outermostDist = -1;
+        for (const [id, axial] of stablePositionMap.current) {
+          const dist = hexDistance(axial, { q: 0, r: 0 });
+          if (dist > outermostDist) {
+            outermostDist = dist;
+            outermostId = id;
+          }
+        }
+
+        // Only fill if the vacant position is more central than the outermost bee
+        const vacantDist = hexDistance(pos, { q: 0, r: 0 });
+        if (outermostId && outermostDist > vacantDist) {
+          // Move outermost bee to the vacant position
+          stablePositionMap.current.set(outermostId, pos);
+          // Bump version so jobGrid recomputes with the new position
+          setPositionVersion(v => v + 1);
+        }
+      }, 800);
+    }
   }, []);
 
   // Reset fly-away tracking when jobs list changes (filter change brings them back)
   const jobIdsKey = useMemo(() => jobs.map(j => j.id).sort().join(","), [jobs]);
   useEffect(() => {
     setFlownAway(new Set());
+    stablePositionMap.current.clear();
+    vacantPositions.current = [];
+    setPositionVersion(0);
   }, [jobIdsKey]);
 
-  // ── Sort jobs by priority (already sorted by parent now, but keep as safety) ──
+  // ── Sort jobs by priority (for initial assignment order only) ──
   const sorted = useMemo(() => {
     return [...jobs].sort((a, b) => {
       const order: Record<string, number> = {
@@ -705,15 +884,39 @@ export default function LiveDraftPanel({
     });
   }, [jobs]);
 
-  // ── Assign every job a hex position on the spiral ──
-  const allPositions = useMemo(() => hexSpiralPositions(sorted.length), [sorted.length]);
+  // ── Assign stable positions: each job keeps its position forever ──
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const jobGrid = useMemo(() => {
-    return sorted.map((job, i) => ({
-      job,
-      q: allPositions[i]?.q ?? 0,
-      r: allPositions[i]?.r ?? 0,
-    }));
-  }, [sorted, allPositions]);
+    const map = stablePositionMap.current;
+    const usedKeys = new Set<string>();
+    // Collect all currently used keys
+    for (const [, axial] of map) {
+      usedKeys.add(hexKey(axial.q, axial.r));
+    }
+
+    // Generate enough spiral positions
+    const spiral = hexSpiralPositions(Math.max(sorted.length + 10, map.size + 20));
+
+    // Assign new jobs to the first available spiral position
+    for (const job of sorted) {
+      if (!map.has(job.id)) {
+        for (const pos of spiral) {
+          const key = hexKey(pos.q, pos.r);
+          if (!usedKeys.has(key)) {
+            map.set(job.id, { q: pos.q, r: pos.r });
+            usedKeys.add(key);
+            break;
+          }
+        }
+      }
+    }
+
+    // Build the grid from stable positions
+    return sorted.map((job) => {
+      const pos = map.get(job.id) || { q: 0, r: 0 };
+      return { job, q: pos.q, r: pos.r };
+    });
+  }, [sorted, positionVersion]);
 
   const gridMap = useMemo(() => {
     const m = new Map<string, (typeof jobGrid)[number]>();
@@ -772,9 +975,9 @@ export default function LiveDraftPanel({
   /** Find the nearest occupied hex center to a pixel position. */
   const snapToNearestHex = useCallback((px: number, py: number): { x: number; y: number } => {
     if (jobGrid.length === 0) return { x: 0, y: 0 };
-    let bestDist = Infinity;
+      let bestDist = Infinity;
     let bestPos = { x: 0, y: 0 };
-    for (const entry of jobGrid) {
+      for (const entry of jobGrid) {
       const p = axialToPixel(entry.q, entry.r, hexSize);
       const d = (p.x - px) ** 2 + (p.y - py) ** 2;
       if (d < bestDist) {
@@ -965,8 +1168,6 @@ export default function LiveDraftPanel({
   // ── Derived ──
   const selectedJob = sorted.find((j) => j.id === selectedJobId) ?? null;
   const totalJobs = sorted.length;
-  const centerEntry = gridMap.get(hexKey(focusAxial.q, focusAxial.r));
-  const centerLabel = centerEntry ? jobLabel(centerEntry.job) : "";
 
   // Minimap positions
   const minimapPositions = useMemo(() =>
@@ -974,55 +1175,41 @@ export default function LiveDraftPanel({
     [jobGrid]
   );
 
-  if (jobs.length === 0) return null;
+  // In fullscreen mode, always render (even with no jobs — shows idle bees)
+  // In non-fullscreen mode, don't render if no jobs
+  if (!fullscreen && jobs.length === 0) return null;
 
   return (
-    <div className="flex flex-col">
-      {/* Navigation header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-honey/20 bg-gradient-to-r from-surface-2/70 via-surface/80 to-surface-2/70 backdrop-blur-sm">
-        <div className="text-xs text-foreground/70 flex items-center gap-2">
-          <motion.div
-            animate={{ rotate: [0, 8, -8, 0] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-            className="w-6 h-6 hex-badge bg-gradient-to-br from-honey to-primary flex items-center justify-center"
-          >
-            <Hexagon className="w-3.5 h-3.5 text-background" />
-          </motion.div>
-          {centerLabel && (
-            <span>
-              Focused on <strong className="text-golden truncate max-w-[200px] inline-block align-bottom">{centerLabel}</strong>
-            </span>
-          )}
-          <span className="text-honey/60 font-semibold">
-            {totalJobs} bee{totalJobs !== 1 ? "s" : ""}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 text-[10px] text-honey/40 font-medium">
-          <span>Scroll to navigate the hive</span>
-        </div>
-      </div>
+    <div className={fullscreen ? "fixed inset-0 z-0" : "flex flex-col"}>
+      {/* ── Hexagonal viewport ── */}
+      <div
+        ref={viewportRef}
+        className={`relative overflow-hidden honeycomb-bg ${fullscreen ? "w-full h-full" : "rounded-b-xl"}`}
+        style={fullscreen ? undefined : { height: "min(60vh, 550px)" }}
+      >
+        {/* Idle floating bees — ambient life across the entire screen */}
+        <IdleBees />
 
-      {/* ── Hexagonal viewport — explicit height, captures wheel events ── */}
-      <div ref={viewportRef} className="relative overflow-hidden rounded-b-xl honeycomb-bg" style={{ height: "min(60vh, 550px)" }}>
-        {/* Floating honey particles — lots of ambient life */}
-        <div className="absolute inset-0 z-5 pointer-events-none overflow-hidden">
-          {Array.from({ length: 20 }).map((_, i) => (
+        {/* Floating honey particles — spread across full screen */}
+        <div className="absolute inset-0 z-[2] pointer-events-none overflow-hidden">
+          {Array.from({ length: fullscreen ? 30 : 20 }).map((_, i) => (
             <div
               key={i}
               className="honey-particle"
               style={{
-                left: `${5 + (i * 4.7) % 90}%`,
-                bottom: `${-8 + (i * 7) % 25}%`,
-                animationDelay: `${i * 0.35}s`,
+                left: `${3 + (i * 3.2) % 94}%`,
+                bottom: `${-5 + (i * 5.3) % 30}%`,
+                animationDelay: `${i * 0.3}s`,
                 opacity: 0,
               }}
             />
           ))}
         </div>
-        {/* Fixed warm spotlight — stays at viewport center, hexes move under it */}
-        <div className="absolute inset-0 hive-spotlight z-10 pointer-events-none" />
 
-        {/* Grid container — smooth-scrolled via rAF transform */}
+        {/* Fixed warm spotlight — stays at viewport center, hexes move under it */}
+        <div className="absolute inset-0 hive-spotlight z-[5] pointer-events-none" />
+
+        {/* Grid container — smooth-scrolled via rAF transform, with optional goo filter */}
         <div
           ref={gridElRef}
           className="absolute inset-0 hive-grid"
@@ -1032,26 +1219,36 @@ export default function LiveDraftPanel({
             {jobGrid.map((entry) => {
               if (flownAway.has(entry.job.id)) return null;
               const px = axialToPixel(entry.q, entry.r, hexSize);
-              return (
-                <div
+            return (
+              <motion.div
                   key={entry.job.id}
                   className="absolute"
-                  style={{
-                    left: `calc(50% + ${px.x - hexSize}px)`,
-                    top: `calc(50% + ${px.y - cellH / 2}px)`,
+                  initial={false}
+                  animate={{
+                    x: px.x - hexSize,
+                    y: px.y - cellH / 2,
                   }}
-                >
-                  <HexCell
+                  transition={{
+                    type: "tween",
+                    duration: 2.5,
+                    ease: [0.25, 0.1, 0.25, 1.0],
+                  }}
+                style={{
+                  left: '50%',
+                  top: '50%',
+                }}
+              >
+                <HexCell
                     job={entry.job}
-                    size={hexSize}
+                  size={hexSize}
                     onClick={() => handleHexClick(entry.q, entry.r, entry.job.id)}
                     streamText={draftTokens.get(entry.job.id) || ""}
                     frame={frameData?.get(entry.job.id) || null}
                     onFlyAway={handleFlyAway}
-                  />
-                </div>
-              );
-            })}
+                />
+              </motion.div>
+            );
+          })}
           </AnimatePresence>
         </div>
 

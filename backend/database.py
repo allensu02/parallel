@@ -136,6 +136,17 @@ CREATE TABLE IF NOT EXISTS kv_store (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS task_demos (
+    id                  TEXT PRIMARY KEY,
+    name                TEXT NOT NULL DEFAULT '',
+    instruction_summary TEXT NOT NULL DEFAULT '',
+    raw_events          TEXT,
+    session_id          TEXT NOT NULL DEFAULT '',
+    created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_demos_created ON task_demos(created_at);
 """
 
 # ---------------------------------------------------------------------------
@@ -458,6 +469,7 @@ async def _ensure_columns():
         "ALTER TABLE jobs ADD COLUMN pipeline_type TEXT DEFAULT 'gmail'",
         "ALTER TABLE jobs ADD COLUMN task_instruction TEXT DEFAULT ''",
         "ALTER TABLE jobs ADD COLUMN live_view_url TEXT DEFAULT ''",
+        "ALTER TABLE jobs ADD COLUMN artifacts TEXT DEFAULT '[]'",
     ]
     for sql in _migrations:
         try:
@@ -574,4 +586,57 @@ async def kv_set(key: str, value: str) -> None:
         "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
         (key, value),
     )
+    await d.commit()
+
+
+async def kv_delete(key: str) -> None:
+    d = await get_db()
+    await d.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+    await d.commit()
+
+
+# ---------------------------------------------------------------------------
+# Task demos (recorded user flows, synthesized for agent context)
+# ---------------------------------------------------------------------------
+
+async def create_task_demo(
+    name: str,
+    instruction_summary: str,
+    session_id: str,
+    raw_events: str | None = None,
+) -> dict:
+    d = await get_db()
+    demo_id = _uuid()
+    now = _now()
+    await d.execute(
+        """INSERT INTO task_demos (id, name, instruction_summary, raw_events, session_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (demo_id, name or "Untitled demo", instruction_summary, raw_events or "", session_id, now),
+    )
+    await d.commit()
+    return {
+        "id": demo_id,
+        "name": name or "Untitled demo",
+        "instruction_summary": instruction_summary,
+        "session_id": session_id,
+        "created_at": now,
+    }
+
+
+async def get_task_demo(demo_id: str) -> dict | None:
+    d = await get_db()
+    cur = await d.execute("SELECT * FROM task_demos WHERE id = ?", (demo_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_task_demos() -> list[dict]:
+    d = await get_db()
+    cur = await d.execute("SELECT * FROM task_demos ORDER BY created_at DESC")
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_task_demo(demo_id: str) -> None:
+    d = await get_db()
+    await d.execute("DELETE FROM task_demos WHERE id = ?", (demo_id,))
     await d.commit()

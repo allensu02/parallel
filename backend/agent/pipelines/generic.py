@@ -103,7 +103,41 @@ class GenericPipeline(Pipeline):
                     "action": action_desc,
                 })
 
-            result = await agent.run_task(on_action=on_action)
+            async def on_login_needed(agent_id: str, live_view_url: str) -> None:
+                """Pause the job and ask the user to log in via the live browser view."""
+                from backend.agent.engine import _answer_events, _answer_data
+
+                q = await db.create_question(
+                    job_id, run_id,
+                    "I hit a login page and need you to log in. "
+                    "Open the live browser view, complete the login, then click Done.",
+                    context="login_required",
+                )
+                await db.update_job(job_id, current_step="waiting_for_login")
+                await _emit(run_id, "job.question", {
+                    "job_id": job_id,
+                    "question_id": q["id"],
+                    "question": q["question"],
+                    "subject": "Login Required",
+                    "live_view_url": live_view_url or "",
+                    "type": "login_required",
+                })
+
+                evt = asyncio.Event()
+                _answer_events[job_id] = evt
+                try:
+                    await asyncio.wait_for(evt.wait(), timeout=600)
+                except asyncio.TimeoutError:
+                    print(f"[GenericPipeline] Job {job_id}: Login handoff timed out after 600s")
+                finally:
+                    _answer_events.pop(job_id, None)
+                    _answer_data.pop(job_id, None)
+
+            result = await agent.run_task(on_action=on_action, on_login_needed=on_login_needed)
+
+            # Serialize artifacts for storage and SSE
+            artifacts_list = [a.to_dict() for a in result.artifacts] if result.artifacts else []
+            artifacts_json = json.dumps(artifacts_list)
 
             result_json = json.dumps({
                 "success": result.success,
@@ -119,6 +153,7 @@ class GenericPipeline(Pipeline):
                     status="completed",
                     current_step="done",
                     summary=result.message[:200] if result.message else "Task completed",
+                    artifacts=artifacts_json,
                     finished_at=_now(),
                 )
                 await db.increment_run_counter(run_id, "completed_jobs")
@@ -127,6 +162,14 @@ class GenericPipeline(Pipeline):
                     "result": result_json,
                     "actions_taken": result.actions_taken,
                 })
+
+                # Emit artifacts as a separate event for the frontend
+                if artifacts_list:
+                    await _emit(run_id, "job.artifacts", {
+                        "job_id": job_id,
+                        "artifacts": artifacts_list,
+                        "task_instruction": instruction[:200],
+                    })
             else:
                 await db.update_job(
                     job_id,

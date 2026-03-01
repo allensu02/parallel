@@ -12,3 +12,4 @@ cryptography
 stagehand
 browserbase
 duckduckgo-search
+httpx

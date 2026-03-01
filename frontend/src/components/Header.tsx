@@ -78,12 +78,13 @@ export default function Header({ onAuthChange }: HeaderProps) {
       initial={{ y: -20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.4, ease: "easeOut" }}
-      className="flex items-center justify-between px-6 py-4 border-b-2 border-honey/25 bg-gradient-to-r from-surface via-surface-2/90 to-surface backdrop-blur-md relative overflow-hidden"
+      className="glass-panel flex items-center justify-between px-6 py-3.5 mx-4 mt-3 relative overflow-hidden honey-drip-edge"
+      style={{ borderRadius: 16 }}
     >
       {/* Honeycomb bg in header */}
-      <div className="absolute inset-0 honeycomb-bg opacity-60 pointer-events-none" />
+      <div className="absolute inset-0 honeycomb-bg opacity-40 pointer-events-none" />
       {/* Warm glow in top-left */}
-      <div className="absolute top-0 left-0 w-64 h-32 bg-gradient-radial from-honey/10 to-transparent pointer-events-none" style={{ background: "radial-gradient(ellipse at top left, rgba(255,224,102,0.12) 0%, transparent 70%)" }} />
+      <div className="absolute top-0 left-0 w-64 h-32 pointer-events-none" style={{ background: "radial-gradient(ellipse at top left, rgba(232,163,23,0.08) 0%, transparent 70%)" }} />
 
       <div className="flex items-center gap-3 relative z-10">
         {/* Hex logo — animated glow + bounce */}
@@ -112,7 +113,7 @@ export default function Header({ onAuthChange }: HeaderProps) {
             </div>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-honey/20 hover:border-honey/40 hover-glow transition-all text-muted hover:text-foreground"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-surface-2/60 border border-honey/20 hover:border-honey/40 hover-glow transition-all text-muted hover:text-foreground"
             >
               <LogOut className="w-3 h-3" />
               Sign out

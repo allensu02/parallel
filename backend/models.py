@@ -103,6 +103,7 @@ class JobOut(BaseModel):
     pipeline_type: str = "gmail"
     task_instruction: str = ""
     live_view_url: str = ""
+    artifacts: str = "[]"  # JSON-encoded list of artifact objects
 
 
 class StepOut(BaseModel):

@@ -12,10 +12,11 @@ controlled via Stagehand's AI-powered automation. Agents can:
 from __future__ import annotations
 
 import asyncio
-import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+import re
 
 from backend.config import (
     BROWSERBASE_API_KEY,
@@ -31,6 +32,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Keywords in error messages that suggest a login wall caused the failure
+_LOGIN_ERROR_HINTS = re.compile(
+    r"(login|sign.?in|auth|password|credential|forbidden|unauthorized|access denied|session expired)",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class AgentTask:
     """Describes what a browser agent should do."""
@@ -42,12 +50,24 @@ class AgentTask:
 
 
 @dataclass
+class Artifact:
+    """A single piece of information the agent found and wants to surface."""
+    type: str  # "link", "text", "screenshot"
+    label: str
+    content: str = ""  # text content or URL
+
+    def to_dict(self) -> dict:
+        return {"type": self.type, "label": self.label, "content": self.content}
+
+
+@dataclass
 class AgentResult:
     """Result returned by a browser agent after completing (or failing) a task."""
     success: bool = False
     message: str = ""
     actions_taken: int = 0
     extracted_data: dict | None = None
+    artifacts: list[Artifact] = field(default_factory=list)
     error: str | None = None
     duration_ms: int = 0
 
@@ -96,6 +116,10 @@ class BrowserAgent:
 
         browser_settings: dict[str, Any] = {
             "solveCaptchas": True,
+            "viewport": {
+                "width": 1280,
+                "height": 720,
+            },
             "fingerprint": {
                 "browsers": ["chrome"],
                 "devices": ["desktop"],
@@ -151,55 +175,258 @@ class BrowserAgent:
         """End the Stagehand session and clean up."""
         if self._session:
             try:
-                await self._session.end()
-            except Exception:
+                await asyncio.wait_for(self._session.end(), timeout=10)
+            except (asyncio.TimeoutError, Exception):
                 pass
         self._session = None
         self._client = None
 
+    # ------------------------------------------------------------------
+    # Login detection
+    # ------------------------------------------------------------------
+
+    async def _detect_login_page(self) -> bool:
+        """Detect if the browser is currently on a login / auth page.
+
+        Uses Stagehand observe() to look for login form elements on the
+        page.  This works with remote Browserbase sessions (where there
+        is no local Playwright page object to read the URL from).
+        """
+        if not self._session:
+            return False
+
+        try:
+            response = await self._session.observe(
+                instruction=(
+                    "Find any login or authentication form elements on the page: "
+                    "username or email input fields, password input fields, "
+                    "or sign-in / login / log-in buttons.  "
+                    "Only return elements that are clearly part of a login or SSO form."
+                ),
+            )
+            elements = response.data.result
+            if isinstance(elements, list) and len(elements) > 0:
+                desc = ", ".join(
+                    getattr(e, "description", str(e))[:60]
+                    for e in elements[:3]
+                )
+                print(
+                    f"[Agent {self.agent_id}] Login page detected via observe(): "
+                    f"{len(elements)} element(s) — {desc}"
+                )
+                return True
+        except Exception as exc:
+            print(f"[Agent {self.agent_id}] observe() login check failed: {exc}")
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Task execution
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    _PROBE_STEPS = 3  # Short first execute() to detect login redirects fast
+
+    async def _execute_task(self, max_steps: int | None = None) -> Any:
+        """Run self._session.execute() with the configured instruction/model."""
+        steps = max_steps if max_steps is not None else self.task.max_steps
+        return await self._session.execute(
+            execute_options={
+                "instruction": self.task.instruction,
+                "max_steps": steps,
+            },
+            agent_config={
+                "model": {
+                    "model_name": STAGEHAND_MODEL,
+                    "api_key": ANTHROPIC_API_KEY,
+                },
+            },
+            timeout=self.task.timeout,
+        )
+
+    async def _handle_login(
+        self,
+        on_login_needed: Any,
+        on_action: Any | None,
+        reason: str,
+    ) -> None:
+        """Pause the agent, hand off to user for login, wait for completion.
+
+        After the user finishes logging in, we re-navigate to re-establish
+        Stagehand's active page reference (SSO redirects during manual login
+        can cause Stagehand to lose track of the page).
+        """
+        print(
+            f"[Agent {self.agent_id}] Login wall detected via {reason}, "
+            f"requesting user login"
+        )
+        self.current_action = "Waiting for user login"
+        if on_action:
+            await on_action(self.agent_id, self.current_action)
+        await on_login_needed(self.agent_id, self.live_view_url)
+        print(f"[Agent {self.agent_id}] User completed login, re-establishing page")
+
+        # After manual login the SSO redirect chain (e.g. Okta → MIT → Canvas)
+        # can leave Stagehand's internal page reference stale.  Re-navigate to
+        # force Stagehand to reconnect to the active page.
+        try:
+            target = self.task.url or "about:blank"
+            await self._session.navigate(url=target)
+            print(f"[Agent {self.agent_id}] Re-navigated to {target}, page restored")
+        except Exception as exc:
+            print(f"[Agent {self.agent_id}] Re-navigate warning: {exc}")
+
+    def _parse_execute_result(self, response: Any) -> tuple[bool, str, int]:
+        """Extract (success, message, action_count) from an execute response."""
+        rd = response.data.result
+        success = getattr(rd, "success", False)
+        message = getattr(rd, "message", "")
+        actions = getattr(rd, "actions", [])
+        return success, message, len(actions) if actions else 0
+
+    def _extract_artifacts_from_message(self, execute_message: str) -> list[Artifact]:
+        """Build artifacts from the execute() result message (instant, no API call).
+
+        Parses the summary text and extracts any URLs mentioned.
+        """
+        artifacts: list[Artifact] = []
+        if not execute_message:
+            return artifacts
+
+        artifacts.append(Artifact(
+            type="text",
+            label="Summary",
+            content=execute_message[:500],
+        ))
+
+        # Pull any URLs out of the message text
+        urls = re.findall(r'https?://[^\s,)\"\']+', execute_message)
+        for url in urls[:5]:
+            artifacts.append(Artifact(
+                type="link",
+                label="Link found",
+                content=url.rstrip("."),
+            ))
+
+        return artifacts
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
     async def run_task(
         self,
         on_action: Any | None = None,
+        on_login_needed: Any | None = None,
     ) -> AgentResult:
-        """Execute the assigned task autonomously."""
+        """Execute the assigned task autonomously.
+
+        Login detection strategy (works with remote Browserbase sessions):
+
+        1. **Pre-navigate check**: After navigating to an explicit URL, use
+           observe() to look for login form elements before execute() starts.
+        2. **Probe phase**: Run a short execute() (3 steps). If it doesn't
+           complete, check with observe() for login elements. This catches
+           internal redirects (e.g. Canvas → Okta) within seconds instead of
+           burning all max_steps on the login form.
+        3. **Post-failure check**: If full execute() still fails, one more
+           observe() + error-message check as a safety net.
+        """
         start_time = datetime.now(timezone.utc)
+        login_handled = False
 
         try:
             if not self._session:
                 raise RuntimeError("Agent not started -- call start() first")
 
+            # ── Navigate to starting URL (if provided) ──
             if self.task.url:
                 self.current_action = f"Navigating to {self.task.url}"
                 if on_action:
                     await on_action(self.agent_id, self.current_action)
                 await self._session.navigate(url=self.task.url)
 
+                # Pre-execute login check (session is idle, observe is safe)
+                if on_login_needed and await self._detect_login_page():
+                    await self._handle_login(on_login_needed, on_action, "pre-navigate observe()")
+                    login_handled = True
+
+            # ── Probe phase: short execute to detect login redirects ──
             self.current_action = "Executing task autonomously"
             if on_action:
                 await on_action(self.agent_id, self.current_action)
 
-            execute_response = await self._session.execute(
-                execute_options={
-                    "instruction": self.task.instruction,
-                    "max_steps": self.task.max_steps,
-                },
-                agent_config={
-                    "model": {
-                        "model_name": STAGEHAND_MODEL,
-                        "api_key": ANTHROPIC_API_KEY,
-                    },
-                },
-                timeout=self.task.timeout,
-            )
+            if on_login_needed and not login_handled:
+                probe_steps = min(self._PROBE_STEPS, self.task.max_steps)
+                print(f"[Agent {self.agent_id}] Running {probe_steps}-step probe for login detection")
+                probe_resp = await self._execute_task(max_steps=probe_steps)
+                probe_ok, probe_msg, probe_actions = self._parse_execute_result(probe_resp)
+                self.actions_taken = probe_actions
 
-            result_data = execute_response.data.result
-            success = getattr(result_data, "success", False)
-            message = getattr(result_data, "message", "")
-            actions = getattr(result_data, "actions", [])
-            self.actions_taken = len(actions) if actions else 0
+                print(
+                    f"[Agent {self.agent_id}] Probe returned: "
+                    f"success={probe_ok}, message={probe_msg}, actions={probe_actions}"
+                )
 
-            print(f"[Agent {self.agent_id}] execute() returned: success={success}, message={message}, actions={self.actions_taken}")
+                if probe_ok:
+                    # Task completed in the probe — we're done
+                    success, message = probe_ok, probe_msg
+                else:
+                    # Probe didn't finish — check if we're on a login page
+                    is_login = await self._detect_login_page()
+                    error_hints = bool(probe_msg and _LOGIN_ERROR_HINTS.search(probe_msg))
 
+                    if is_login or error_hints:
+                        reason = "observe()" if is_login else "error hints"
+                        await self._handle_login(on_login_needed, on_action, reason)
+                        login_handled = True
+
+                    # Continue with full execution (post-login or just needs more steps)
+                    self.current_action = "Executing task autonomously"
+                    if on_action:
+                        await on_action(self.agent_id, self.current_action)
+                    execute_response = await self._execute_task()
+                    success, message, extra_actions = self._parse_execute_result(execute_response)
+                    self.actions_taken += extra_actions
+
+                    print(
+                        f"[Agent {self.agent_id}] Full execute returned: "
+                        f"success={success}, message={message}, actions={extra_actions}"
+                    )
+            else:
+                # No login callback, or login was already handled pre-navigate
+                execute_response = await self._execute_task()
+                success, message, action_count = self._parse_execute_result(execute_response)
+                self.actions_taken += action_count
+                print(
+                    f"[Agent {self.agent_id}] execute() returned: "
+                    f"success={success}, message={message}, actions={action_count}"
+                )
+
+            # ── Post-failure safety net ──
+            if not success and not login_handled and on_login_needed:
+                is_login = await self._detect_login_page()
+                error_hints = bool(message and _LOGIN_ERROR_HINTS.search(message))
+                if is_login or error_hints:
+                    reason = "observe()" if is_login else "error hints"
+                    await self._handle_login(on_login_needed, on_action, f"post-failure {reason}")
+                    login_handled = True
+
+                    self.current_action = "Retrying task after login"
+                    if on_action:
+                        await on_action(self.agent_id, self.current_action)
+                    execute_response = await self._execute_task()
+                    success, message, extra_actions = self._parse_execute_result(execute_response)
+                    self.actions_taken += extra_actions
+                    print(
+                        f"[Agent {self.agent_id}] Post-login retry: "
+                        f"success={success}, message={message}"
+                    )
+
+            # ── Extract structured data (if requested and task succeeded) ──
             extracted_data = None
             if self.task.extract_schema and success:
                 self.current_action = "Extracting structured data"
@@ -216,13 +443,19 @@ class BrowserAgent:
                 elif hasattr(extracted_data, "__dict__"):
                     extracted_data = extracted_data.__dict__
 
-            elapsed = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+            # ── Build artifacts from the execute message (instant) ──
+            artifacts = self._extract_artifacts_from_message(message) if success else []
+
+            elapsed = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            )
 
             self.result = AgentResult(
                 success=success,
                 message=message,
                 actions_taken=self.actions_taken,
                 extracted_data=extracted_data,
+                artifacts=artifacts,
                 error=message if not success else None,
                 duration_ms=elapsed,
             )
@@ -234,7 +467,9 @@ class BrowserAgent:
             return self.result
 
         except Exception as exc:
-            elapsed = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+            elapsed = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            )
             err_msg = f"{type(exc).__name__}: {exc}"
             self.error_msg = err_msg
             self.status = "failed"
@@ -311,6 +546,7 @@ class BrowserAgent:
                 "message": self.result.message,
                 "actions_taken": self.result.actions_taken,
                 "extracted_data": self.result.extracted_data,
+                "artifacts": [a.to_dict() for a in self.result.artifacts],
                 "error": self.result.error,
                 "duration_ms": self.result.duration_ms,
             } if self.result else None,

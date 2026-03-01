@@ -19,6 +19,7 @@ from backend.routes.events import router as events_router
 from backend.routes.inbox import router as inbox_router
 from backend.routes.profile import router as profile_router
 from backend.routes.swarm import router as swarm_router
+from backend.routes.demo import router as demo_router
 
 
 async def _recover_stale_runs():
@@ -99,6 +100,7 @@ app.include_router(runs_router, prefix="/api/runs", tags=["runs"])
 app.include_router(events_router, prefix="/api/events", tags=["events"])
 app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
 app.include_router(swarm_router, prefix="/api/swarm", tags=["swarm"])
+app.include_router(demo_router, prefix="/api/demo", tags=["demo"])
 
 
 @app.get("/api/health")

@@ -640,6 +640,25 @@ async def _process_pipeline_job(job_data: dict) -> None:
         params.setdefault("description", job_data.get("task_instruction", ""))
         params.setdefault("url", job_data.get("url", ""))
 
+        # ── Demo matching: auto-prepend demo procedure if a saved demo matches ──
+        try:
+            demos = await db.list_task_demos()
+            if demos:
+                from backend.agent.llm import pick_best_demo_for_task
+                original_instruction = params.get("instruction", "")
+                matched_id = await pick_best_demo_for_task(original_instruction, demos)
+                if matched_id:
+                    demo = await db.get_task_demo(matched_id)
+                    if demo and demo.get("instruction_summary"):
+                        params["instruction"] = (
+                            f"Follow this demonstrated procedure:\n"
+                            f"{demo['instruction_summary']}\n\n"
+                            f"Task: {original_instruction}"
+                        )
+                        print(f"[Engine] Job {job_id}: Matched demo '{demo.get('name')}' ({matched_id})")
+        except Exception as demo_err:
+            print(f"[Engine] Job {job_id}: Demo matching failed (non-fatal): {demo_err}")
+
         await pipeline.execute(run_id, job_id, params)
 
     except Exception as exc:

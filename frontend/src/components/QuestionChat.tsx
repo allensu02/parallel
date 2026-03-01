@@ -5,16 +5,29 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronDown, ChevronUp, Send,
   Calendar, Hexagon, Check, Mail, Loader2, ChevronRight,
+  ExternalLink, LogIn, FileText, Link2, Package,
 } from "lucide-react";
 import { answerQuestion, fetchThreadContent, type Job, type ThreadContent } from "@/lib/api";
 
+export interface ArtifactItem {
+  type: "link" | "text" | "screenshot" | "live_view";
+  label: string;
+  content: string;
+}
+
 export interface ChatMessage {
   id: string;
-  type: "question" | "answer";
+  type: "question" | "answer" | "report";
   jobId: string;
   subject: string;
   text: string;
   timestamp: string;
+  /** Set when this is a login_required question */
+  liveViewUrl?: string;
+  /** Distinguishes login handoffs from normal questions */
+  questionType?: "login_required" | "general";
+  /** Artifacts returned by the worker (for "report" type messages) */
+  artifacts?: ArtifactItem[];
 }
 
 interface QuestionChatProps {
@@ -46,8 +59,22 @@ function QuestionCard({
   const [contextLoading, setContextLoading] = useState(false);
 
   const isAnswered = !!answer;
-  const isCalendarRelated = ["availability", "calendar", "schedule", "meeting", "free time", "when are you"]
+  const isLoginRequired = question.questionType === "login_required" || !!question.liveViewUrl;
+  const isCalendarRelated = !isLoginRequired && ["availability", "calendar", "schedule", "meeting", "free time", "when are you"]
     .some((k) => question.text.toLowerCase().includes(k));
+
+  const handleLoginDone = async () => {
+    if (!runId) return;
+    setSending(true);
+    try {
+      await answerQuestion(runId, question.jobId, "done");
+      onAnswered?.(question.jobId);
+    } catch {
+      // ignore
+    } finally {
+      setSending(false);
+    }
+  };
 
   const handleSend = async () => {
     if (!input.trim() || !runId) return;
@@ -118,6 +145,12 @@ function QuestionCard({
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {isLoginRequired && !isAnswered && (
+            <span className="flex items-center gap-1 text-[9px] text-honey font-semibold px-1.5 py-0.5 rounded bg-honey/10 border border-honey/20 animate-pulse">
+              <LogIn className="w-2.5 h-2.5" />
+              Login Required
+            </span>
+          )}
           {isCalendarRelated && (
             <button className="flex items-center gap-1 text-[9px] text-primary hover:text-honey transition-colors px-1.5 py-0.5 rounded bg-honey-glow border border-primary/15">
               <Calendar className="w-2.5 h-2.5" />
@@ -203,6 +236,32 @@ function QuestionCard({
           <div className="text-[10px] text-muted mb-0.5">Your answer:</div>
           <div className="text-xs text-success">{answer.text === "(answered)" ? "Answered" : answer.text}</div>
         </div>
+      ) : isLoginRequired ? (
+        <div className="px-3 py-2.5 border-t border-honey/15 space-y-2">
+          {question.liveViewUrl && (
+            <a
+              href={question.liveViewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-surface-2/80 border border-honey/20 text-xs font-semibold text-honey hover:bg-honey/10 hover:border-honey/40 transition-all"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open Live Browser
+            </a>
+          )}
+          <button
+            onClick={handleLoginDone}
+            disabled={sending}
+            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-gradient-to-r from-primary via-honey to-primary-light text-background text-xs font-bold hover:shadow-md hover:shadow-honey/20 disabled:opacity-50 transition-all"
+          >
+            {sending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Check className="w-3.5 h-3.5" />
+            )}
+            {sending ? "Resuming..." : "I've Logged In — Resume"}
+          </button>
+        </div>
       ) : (
         <div className="px-3 py-2 border-t border-primary/10 flex items-center gap-2">
           <input
@@ -228,14 +287,103 @@ function QuestionCard({
 }
 
 
+/* ─── Worker report card (artifacts) ─── */
+
+function ReportCard({ report }: { report: ChatMessage }) {
+  const artifacts = report.artifacts ?? [];
+  const textArtifacts = artifacts.filter((a) => a.type === "text");
+  const linkArtifacts = artifacts.filter((a) => a.type === "link");
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.3, type: "spring" }}
+      className="rounded-xl border border-honey/30 bg-gradient-to-br from-honey/5 to-honey/[0.02] overflow-hidden"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 bg-honey/10 border-b border-honey/20">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="w-5 h-5 hex-badge bg-honey/20 flex-shrink-0 flex items-center justify-center">
+            <Package className="w-2.5 h-2.5 text-honey" />
+          </div>
+          <span className="text-xs font-bold text-golden truncate">
+            {report.subject || "Worker Report"}
+          </span>
+        </div>
+        <span className="text-[9px] font-semibold px-2 py-0.5 rounded-full bg-honey/15 text-honey border border-honey/25">
+          Findings
+        </span>
+      </div>
+
+      {/* Summary text */}
+      {textArtifacts.length > 0 && (
+        <div className="px-3 py-2.5 border-b border-honey/10">
+          {textArtifacts.map((a, i) => (
+            <div key={i} className="text-xs leading-relaxed text-foreground/90">
+              <span className="text-[10px] font-semibold text-honey/70 uppercase tracking-wider block mb-0.5">
+                {a.label}
+              </span>
+              {a.content}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Links */}
+      {linkArtifacts.length > 0 && (
+        <div className="px-3 py-2.5 space-y-1.5">
+          <span className="text-[10px] font-semibold text-honey/70 uppercase tracking-wider">
+            Links & Resources
+          </span>
+          {linkArtifacts.map((a, i) => (
+            <a
+              key={i}
+              href={a.content}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-surface-2/60 border border-honey/15 hover:border-honey/40 hover:bg-honey/5 transition-all group"
+            >
+              {a.content.match(/\.pdf/i) ? (
+                <FileText className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+              ) : (
+                <Link2 className="w-3.5 h-3.5 text-honey/70 flex-shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-medium text-foreground group-hover:text-honey transition-colors truncate">
+                  {a.label}
+                </div>
+                <div className="text-[10px] text-muted truncate">
+                  {a.content}
+                </div>
+              </div>
+              <ExternalLink className="w-3 h-3 text-muted group-hover:text-honey transition-colors flex-shrink-0" />
+            </a>
+          ))}
+        </div>
+      )}
+
+      {/* Timestamp */}
+      <div className="px-3 py-1.5 border-t border-honey/10 bg-surface-2/30">
+        <span className="text-[9px] text-muted">
+          {new Date(report.timestamp).toLocaleTimeString()}
+        </span>
+      </div>
+    </motion.div>
+  );
+}
+
+
 /* ─── Main panel ─── */
 
 export default function QuestionChat({ messages, runId, jobs, onAnswered }: QuestionChatProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [showAnswered, setShowAnswered] = useState(false);
+  const [showReports, setShowReports] = useState(true);
 
   const questions = messages.filter((m) => m.type === "question");
   const answers = messages.filter((m) => m.type === "answer");
+  const reports = messages.filter((m) => m.type === "report");
 
   const pendingQuestions = questions.filter(
     (q) => !answers.some((a) => a.jobId === q.jobId)
@@ -245,13 +393,14 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
   );
   const pendingCount = pendingQuestions.length;
   const answeredCount = answeredQuestions.length;
+  const reportCount = reports.length;
 
-  // Auto-expand when new question arrives
+  // Auto-expand when new question or report arrives
   useEffect(() => {
-    if (pendingCount > 0) {
+    if (pendingCount > 0 || reportCount > 0) {
       setCollapsed(false);
     }
-  }, [pendingCount]);
+  }, [pendingCount, reportCount]);
 
   if (messages.length === 0) return null;
 
@@ -262,11 +411,11 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
       className="fixed bottom-0 left-0 right-0 z-40"
     >
       <div className="max-w-7xl mx-auto px-6">
-        <div className="rounded-t-xl border border-b-0 border-primary/20 bg-surface/95 backdrop-blur-md shadow-2xl shadow-black/40 overflow-hidden">
+        <div className="glass-panel rounded-b-none border-b-0 shadow-2xl shadow-black/40 overflow-hidden">
           {/* Toggle header */}
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="w-full flex items-center justify-between px-4 py-2.5 bg-surface-2/80 hover:bg-primary/5 transition-all border-b border-primary/10"
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-surface-2/40 hover:bg-honey/5 transition-all border-b border-honey/10"
           >
             <div className="flex items-center gap-2">
               <div className="relative">
@@ -278,11 +427,16 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
                 )}
               </div>
               <span className="text-sm font-bold text-golden">
-                {pendingCount > 0 ? "Hive Needs Input" : "Hive Questions"}
+                {pendingCount > 0 ? "Hive Needs Input" : reportCount > 0 ? "Hive Reports" : "Hive Questions"}
               </span>
               {pendingCount > 0 && (
                 <span className="text-[10px] font-bold bg-red-500/15 text-red-400 px-2 py-0.5 rounded-full border border-red-500/30 animate-pulse">
                   {pendingCount} pending
+                </span>
+              )}
+              {reportCount > 0 && pendingCount === 0 && (
+                <span className="text-[10px] font-bold bg-honey/15 text-honey px-2 py-0.5 rounded-full border border-honey/30">
+                  {reportCount} report{reportCount !== 1 ? "s" : ""}
                 </span>
               )}
             </div>
@@ -303,7 +457,40 @@ export default function QuestionChat({ messages, runId, jobs, onAnswered }: Ques
                 transition={{ duration: 0.2 }}
                 className="overflow-hidden"
               >
-                <div className="max-h-[350px] overflow-y-auto px-3 py-3 space-y-2">
+                <div className="max-h-[400px] overflow-y-auto px-3 py-3 space-y-2">
+                  {/* Worker reports — findings from completed tasks */}
+                  {reports.length > 0 && (
+                    <div className="space-y-2">
+                      {showReports ? (
+                        <>
+                          {reports.map((r) => (
+                            <ReportCard key={r.id} report={r} />
+                          ))}
+                          {reports.length > 2 && (
+                            <button
+                              onClick={() => setShowReports(false)}
+                              className="w-full text-center text-[10px] text-muted hover:text-honey transition-colors py-1"
+                            >
+                              Collapse reports
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setShowReports(true)}
+                          className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[10px] text-muted hover:text-foreground transition-colors rounded-lg hover:bg-surface-2"
+                        >
+                          <ChevronRight className="w-3 h-3" />
+                          <Package className="w-3 h-3 text-honey" />
+                          <span>{reportCount} worker report{reportCount !== 1 ? "s" : ""}</span>
+                        </button>
+                      )}
+                      {pendingQuestions.length > 0 && (
+                        <div className="border-b border-border/30" />
+                      )}
+                    </div>
+                  )}
+
                   {/* Pending (unanswered) questions — always visible */}
                   {pendingQuestions.map((q) => {
                     const job = jobs?.find((j) => j.id === q.jobId);
