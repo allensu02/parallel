@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS steps (
     error_msg   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS questions (
+    id          TEXT PRIMARY KEY,
+    job_id      TEXT NOT NULL REFERENCES jobs(id),
+    run_id      TEXT NOT NULL,
+    question    TEXT NOT NULL,
+    context     TEXT NOT NULL DEFAULT '',
+    answer      TEXT,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL,
+    answered_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_questions_job ON questions(job_id);
+CREATE INDEX IF NOT EXISTS idx_questions_run ON questions(run_id);
+
 CREATE TABLE IF NOT EXISTS oauth_tokens (
     id            TEXT PRIMARY KEY DEFAULT 'default',
     access_token  TEXT,
@@ -73,6 +88,16 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     client_secret TEXT,
     expiry        TEXT,
     email         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id          TEXT PRIMARY KEY DEFAULT 'default',
+    email       TEXT,
+    style_profile TEXT DEFAULT '{}',
+    preferences TEXT DEFAULT '{}',
+    edit_diffs  TEXT DEFAULT '[]',
+    created_at  TEXT,
+    updated_at  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id);
@@ -96,6 +121,12 @@ async def get_db() -> aiosqlite.Connection:
         await _db.execute("PRAGMA journal_mode=WAL")
         await _db.execute("PRAGMA foreign_keys=ON")
         await _db.commit()
+        # Run migrations for new columns
+        try:
+            await _db.execute("ALTER TABLE jobs ADD COLUMN draft_text TEXT DEFAULT ''")
+            await _db.commit()
+        except Exception:
+            pass
     return _db
 
 
@@ -265,3 +296,136 @@ async def get_oauth_token() -> dict | None:
     cur = await db.execute("SELECT * FROM oauth_tokens WHERE id = 'default'")
     row = await cur.fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Question CRUD
+# ---------------------------------------------------------------------------
+
+async def create_question(job_id: str, run_id: str, question: str, context: str = "") -> dict:
+    db = await get_db()
+    qid = _uuid()
+    now = _now()
+    await db.execute(
+        """INSERT INTO questions (id, job_id, run_id, question, context, status, created_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
+        (qid, job_id, run_id, question, context, now),
+    )
+    await db.commit()
+    return {
+        "id": qid, "job_id": job_id, "run_id": run_id,
+        "question": question, "context": context,
+        "answer": None, "status": "pending", "created_at": now,
+    }
+
+
+async def answer_question(question_id: str, answer: str) -> dict | None:
+    db = await get_db()
+    now = _now()
+    await db.execute(
+        "UPDATE questions SET answer = ?, status = 'answered', answered_at = ? WHERE id = ?",
+        (answer, now, question_id),
+    )
+    await db.commit()
+    cur = await db.execute("SELECT * FROM questions WHERE id = ?", (question_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_pending_question(job_id: str) -> dict | None:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT * FROM questions WHERE job_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+        (job_id,),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_questions(run_id: str) -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT * FROM questions WHERE run_id = ? ORDER BY created_at", (run_id,)
+    )
+    return [dict(r) for r in await cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# User Profile CRUD
+# ---------------------------------------------------------------------------
+
+async def get_user_profile(profile_id: str = "default") -> dict | None:
+    d = await get_db()
+    cur = await d.execute("SELECT * FROM user_profiles WHERE id = ?", (profile_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def save_user_profile(
+    profile_id: str = "default",
+    email: str = "",
+    style_profile: str = "{}",
+    preferences: str = "{}",
+) -> dict:
+    d = await get_db()
+    now = _now()
+    await d.execute(
+        """INSERT OR REPLACE INTO user_profiles
+           (id, email, style_profile, preferences, edit_diffs, created_at, updated_at)
+           VALUES (?, ?, ?, ?,
+                   COALESCE((SELECT edit_diffs FROM user_profiles WHERE id = ?), '[]'),
+                   COALESCE((SELECT created_at FROM user_profiles WHERE id = ?), ?),
+                   ?)""",
+        (profile_id, email, style_profile, preferences, profile_id, profile_id, now, now),
+    )
+    await d.commit()
+    return {
+        "id": profile_id,
+        "email": email,
+        "style_profile": style_profile,
+        "preferences": preferences,
+        "updated_at": now,
+    }
+
+
+async def update_user_profile(profile_id: str = "default", **fields) -> None:
+    d = await get_db()
+    fields["updated_at"] = _now()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [profile_id]
+    await d.execute(f"UPDATE user_profiles SET {sets} WHERE id = ?", vals)
+    await d.commit()
+
+
+async def append_edit_diff(profile_id: str, diff: dict) -> None:
+    """Append an edit diff to the user profile for ongoing learning."""
+    import json
+    d = await get_db()
+    cur = await d.execute("SELECT edit_diffs FROM user_profiles WHERE id = ?", (profile_id,))
+    row = await cur.fetchone()
+    if row:
+        existing = json.loads(row["edit_diffs"] or "[]")
+    else:
+        existing = []
+    existing.append(diff)
+    # Keep last 50 diffs
+    existing = existing[-50:]
+    await d.execute(
+        "UPDATE user_profiles SET edit_diffs = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(existing), _now(), profile_id),
+    )
+    await d.commit()
+
+
+# ---------------------------------------------------------------------------
+# Schema migration helpers (add columns if missing)
+# ---------------------------------------------------------------------------
+
+async def _ensure_columns():
+    """Add new columns to existing tables if they don't exist."""
+    d = await get_db()
+    try:
+        await d.execute("ALTER TABLE jobs ADD COLUMN draft_text TEXT DEFAULT ''")
+        await d.commit()
+    except Exception:
+        pass  # Column already exists

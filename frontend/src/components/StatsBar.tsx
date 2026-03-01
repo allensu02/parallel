@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CheckCircle2, XCircle, SkipForward, Loader2, Layers } from "lucide-react";
+import { CheckCircle2, XCircle, SkipForward, Clock, Hexagon } from "lucide-react";
 import type { Run } from "@/lib/api";
 
 interface StatsBarProps {
@@ -15,7 +15,7 @@ export default function StatsBar({ run }: StatsBarProps) {
     {
       label: "Total",
       value: run.total_jobs,
-      icon: <Layers className="w-4 h-4" />,
+      icon: <Hexagon className="w-4 h-4" />,
       color: "text-foreground",
     },
     {
@@ -39,7 +39,7 @@ export default function StatsBar({ run }: StatsBarProps) {
     {
       label: "In Progress",
       value: Math.max(0, run.total_jobs - run.completed_jobs - run.failed_jobs - run.skipped_jobs),
-      icon: <Loader2 className="w-4 h-4 animate-spin" />,
+      icon: <Clock className="w-4 h-4" />,
       color: "text-primary-light",
     },
   ];
@@ -55,13 +55,13 @@ export default function StatsBar({ run }: StatsBarProps) {
       transition={{ duration: 0.3 }}
       className="space-y-3"
     >
-      {/* Progress bar */}
+      {/* Golden progress bar */}
       <div className="h-2 rounded-full bg-surface-2 overflow-hidden">
         <motion.div
           initial={{ width: 0 }}
           animate={{ width: `${progress}%` }}
           transition={{ duration: 0.5, ease: "easeOut" }}
-          className="h-full rounded-full bg-gradient-to-r from-primary to-primary-light"
+          className="h-full rounded-full bg-gradient-to-r from-primary via-honey to-primary-light"
         />
       </div>
 
@@ -85,11 +85,11 @@ export default function StatsBar({ run }: StatsBarProps) {
         ))}
 
         <div className="ml-auto flex items-center gap-2">
-          <span className={`text-xs font-medium px-2 py-1 rounded-md ${
-            run.status === "running" ? "bg-primary/15 text-primary-light" :
-            run.status === "completed" ? "bg-success/15 text-success" :
-            run.status === "failed" ? "bg-error/15 text-error" :
-            "bg-surface-2 text-muted"
+          <span className={`text-xs font-medium px-2.5 py-1 rounded-lg border ${
+            run.status === "running" ? "bg-honey-glow text-primary border-primary/20" :
+            run.status === "completed" ? "bg-success/10 text-success border-success/20" :
+            run.status === "failed" ? "bg-error/10 text-error border-error/20" :
+            "bg-surface-2 text-muted border-border"
           }`}>
             {run.status}
           </span>

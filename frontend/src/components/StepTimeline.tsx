@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Check, X, Loader2, Circle } from "lucide-react";
+import { Check, X, Loader2, Hexagon } from "lucide-react";
 
 const STEP_LABELS: Record<string, string> = {
   fetch_thread: "Fetch",
@@ -33,7 +33,6 @@ export default function StepTimeline({ steps, currentStep, compact = false }: St
       {ALL_STEPS.map((name, i) => {
         const step = stepMap.get(name);
         const status = step?.status || (currentStep === name ? "running" : "pending");
-        const isActive = status === "running";
         const label = STEP_LABELS[name] || name;
 
         return (
@@ -51,13 +50,13 @@ export default function StepTimeline({ steps, currentStep, compact = false }: St
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ delay: i * 0.05, duration: 0.2 }}
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-300 ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-all duration-300 ${
                 status === "completed"
                   ? "bg-success/15 text-success"
                   : status === "failed"
                   ? "bg-error/15 text-error"
                   : status === "running"
-                  ? "bg-primary/15 text-primary-light animate-pulse-glow"
+                  ? "bg-honey-glow text-primary animate-honey-glow"
                   : status === "skipped"
                   ? "bg-surface-2 text-muted line-through"
                   : "bg-surface-2 text-muted"
@@ -67,7 +66,7 @@ export default function StepTimeline({ steps, currentStep, compact = false }: St
               {status === "completed" && <Check className="w-3 h-3" />}
               {status === "failed" && <X className="w-3 h-3" />}
               {status === "running" && <Loader2 className="w-3 h-3 animate-spin" />}
-              {status === "pending" && <Circle className="w-2.5 h-2.5" />}
+              {status === "pending" && <Hexagon className="w-2.5 h-2.5" />}
               {!compact && <span>{label}</span>}
               {step?.duration_ms && !compact ? (
                 <span className="text-[10px] opacity-60">{step.duration_ms}ms</span>

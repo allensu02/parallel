@@ -23,14 +23,13 @@ export default function RunDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [screenshots, setScreenshots] = useState<Map<string, string>>(new Map());
 
-  // Load initial data
   useEffect(() => {
     getRun(runId).then(setRun).catch(() => {});
     listJobs(runId).then(setJobs).catch(() => {});
   }, [runId]);
 
-  // Polling for updates
   useEffect(() => {
     if (!run || run.status === "completed" || run.status === "failed") return;
     const timer = setInterval(async () => {
@@ -44,13 +43,12 @@ export default function RunDetailPage() {
     return () => clearInterval(timer);
   }, [run, runId]);
 
-  // SSE
   const handleSSE = useCallback((msg: SSEMessage) => {
     const { event, data } = msg;
     if (event.startsWith("run.")) {
       setRun((prev) => prev ? { ...prev, ...data } as Run : prev);
     }
-    if (event.startsWith("job.")) {
+    if (event.startsWith("job.") && !event.startsWith("job.screenshot")) {
       const jobId = data.job_id as string;
       setJobs((prev) => {
         const idx = prev.findIndex((j) => j.id === jobId);
@@ -60,16 +58,22 @@ export default function RunDetailPage() {
         return updated;
       });
     }
+    if (event === "job.screenshot") {
+      setScreenshots((prev) => {
+        const next = new Map(prev);
+        next.set(data.job_id as string, data.url as string);
+        return next;
+      });
+    }
   }, []);
 
   useSSE(getSSEUrl(runId), handleSSE);
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header />
+      <Header onAuthChange={() => {}} />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6 space-y-6">
-        {/* Back link + run ID */}
         <div className="flex items-center gap-3">
           <Link
             href="/"
@@ -87,10 +91,8 @@ export default function RunDetailPage() {
           </div>
         </div>
 
-        {/* Stats */}
         <StatsBar run={run} />
 
-        {/* Jobs */}
         {jobs.length > 0 && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -118,7 +120,7 @@ export default function RunDetailPage() {
             </div>
 
             {viewMode === "grid" ? (
-              <AgentGrid jobs={jobs} onSelectJob={setSelectedJob} />
+              <AgentGrid jobs={jobs} screenshots={screenshots} onSelectJob={setSelectedJob} />
             ) : (
               <div className="space-y-2">
                 {jobs.map((job, i) => (

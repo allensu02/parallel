@@ -47,6 +47,8 @@ export function useSSE(url: string | null, onMessage: SSEHandler) {
         "run.completed", "run.failed",
         "job.started", "job.context", "job.classified",
         "job.completed", "job.failed", "job.skipped", "job.retrying",
+        "job.draft_token", "job.draft_complete", "job.pending_approval",
+        "job.question", "job.screenshot",
         "step.started", "step.completed", "step.failed",
         "keepalive",
       ];
@@ -64,8 +66,8 @@ export function useSSE(url: string | null, onMessage: SSEHandler) {
       es.onerror = () => {
         setConnected(false);
         es?.close();
-        // Reconnect after a short delay
-        reconnectTimer = setTimeout(connect, 2000);
+        // Reconnect quickly
+        reconnectTimer = setTimeout(connect, 500);
       };
     }
 

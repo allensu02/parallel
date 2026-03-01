@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Mail, Zap, AlertTriangle, CheckCircle2, Clock, SkipForward } from "lucide-react";
+import { Hexagon, AlertTriangle, CheckCircle2, Clock, SkipForward } from "lucide-react";
 import StepTimeline from "./StepTimeline";
 import type { Job } from "@/lib/api";
 
@@ -12,7 +12,7 @@ interface JobRowProps {
 }
 
 const STATUS_CONFIG: Record<string, { icon: React.ReactNode; bg: string }> = {
-  running: { icon: <Zap className="w-3.5 h-3.5 text-primary-light" />, bg: "border-l-primary" },
+  running: { icon: <Hexagon className="w-3.5 h-3.5 text-primary-light" />, bg: "border-l-primary" },
   completed: { icon: <CheckCircle2 className="w-3.5 h-3.5 text-success" />, bg: "border-l-success" },
   failed: { icon: <AlertTriangle className="w-3.5 h-3.5 text-error" />, bg: "border-l-error" },
   queued: { icon: <Clock className="w-3.5 h-3.5 text-muted" />, bg: "border-l-border" },
@@ -28,7 +28,7 @@ export default function JobRow({ job, index, onClick }: JobRowProps) {
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay: Math.min(index * 0.02, 1), duration: 0.25 }}
       onClick={onClick}
-      className={`flex items-center gap-4 px-4 py-3 rounded-lg bg-surface border border-border border-l-2 ${config.bg} hover:bg-surface-2 cursor-pointer transition-all duration-200`}
+      className={`flex items-center gap-4 px-4 py-3 rounded-xl bg-surface border border-border border-l-2 ${config.bg} hover:bg-surface-2 cursor-pointer transition-all duration-200 hover-glow`}
     >
       {/* Status icon */}
       <div className="flex-shrink-0">{config.icon}</div>
@@ -41,7 +41,7 @@ export default function JobRow({ job, index, onClick }: JobRowProps) {
         <div className="flex items-center gap-2 mt-0.5">
           {job.intent && (
             <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
-              job.intent === "reply" ? "bg-primary/15 text-primary-light" :
+              job.intent === "reply" ? "bg-honey-glow text-primary" :
               job.intent === "ignore" ? "bg-muted/15 text-muted" :
               "bg-warning/15 text-warning"
             }`}>

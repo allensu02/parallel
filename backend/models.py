@@ -24,6 +24,8 @@ class RunStatus(str, enum.Enum):
 class JobStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
+    pending_approval = "pending_approval"
+    waiting_for_input = "waiting_for_input"
     completed = "completed"
     failed = "failed"
     skipped = "skipped"
@@ -61,7 +63,10 @@ STEP_NAMES: list[str] = [
 # ---------------------------------------------------------------------------
 
 class RunCreate(BaseModel):
-    max_threads: int = Field(default=100, ge=1, le=500)
+    thread_ids: list[str] = Field(default_factory=list)
+    thread_subjects: dict[str, str] = Field(default_factory=dict)
+    # Legacy fallback
+    max_threads: int | None = None
 
 
 class RunOut(BaseModel):
@@ -80,13 +85,14 @@ class JobOut(BaseModel):
     run_id: str
     thread_id: str
     subject: str = ""
-    status: JobStatus
+    status: str = ""
     current_step: str = ""
     attempt: int = 0
     error_msg: str | None = None
     intent: str | None = None
     confidence: float | None = None
     draft_id: str | None = None
+    draft_text: str | None = None
     summary: str | None = None
     tokens_used: int = 0
     duration_ms: int = 0
@@ -117,5 +123,30 @@ class OAuthStatusOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class SSEEvent(BaseModel):
-    event: str  # e.g. "job.started", "step.completed", "run.completed"
+    event: str
     data: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Question / Answer / Approve models
+# ---------------------------------------------------------------------------
+
+class QuestionOut(BaseModel):
+    id: str
+    job_id: str
+    run_id: str
+    question: str
+    context: str = ""
+    answer: str | None = None
+    status: str = "pending"
+    created_at: str = ""
+    answered_at: str | None = None
+
+
+class AnswerIn(BaseModel):
+    answer: str
+
+
+class ApproveIn(BaseModel):
+    action: str = "approve"  # "approve" or "discard"
+    draft_text: str = ""  # optional edited draft

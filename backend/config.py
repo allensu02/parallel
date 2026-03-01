@@ -24,6 +24,10 @@ GOOGLE_SCOPES: list[str] = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
 ]
 
 # ---------------------------------------------------------------------------
@@ -47,10 +51,15 @@ FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 BACKEND_PORT: int = int(os.getenv("BACKEND_PORT", "8000"))
 
 # ---------------------------------------------------------------------------
+# Browser harness
+# ---------------------------------------------------------------------------
+BROWSER_POOL_SIZE: int = int(os.getenv("BROWSER_POOL_SIZE", "8"))
+
+# ---------------------------------------------------------------------------
 # Concurrency limits
 # ---------------------------------------------------------------------------
 MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "200"))
 GMAIL_CONCURRENCY: int = int(os.getenv("GMAIL_CONCURRENCY", "25"))
-LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "10"))
+LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "3"))
 MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
-STEP_TIMEOUT_SECONDS: int = int(os.getenv("STEP_TIMEOUT_SECONDS", "60"))
+STEP_TIMEOUT_SECONDS: int = int(os.getenv("STEP_TIMEOUT_SECONDS", "180"))

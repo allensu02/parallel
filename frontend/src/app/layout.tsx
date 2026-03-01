@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Parallel — Agent Framework",
-  description: "Mass-parallel email agent framework with real-time observability",
+  title: "Hive — Intelligent Email Swarm",
+  description: "Deploy AI worker bees to draft, review, and manage your emails in parallel",
 };
 
 export default function RootLayout({
@@ -23,8 +23,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <body
+        suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}
       >
         {children}
